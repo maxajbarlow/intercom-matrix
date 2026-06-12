@@ -56,14 +56,46 @@ server-side cached snapshot per system, and a lock + 3 s minimum interval mean a
 controller is never hammered no matter how many people connect. A failed refresh
 keeps the **last good data** (shown as *stale*) rather than blanking out.
 
-## Setup
+## Installation & setup
+
+### Prerequisites
+
+- **Node.js 24 or newer** — the request and auth stores use the built-in
+  `node:sqlite` module (`DatabaseSync`), which is unflagged from Node 24 onward.
+  Check yours with `node --version`. (There is no separate database server to
+  install — the SQLite files live under `data/`.)
+- **npm** (bundled with Node) and **git**.
+- **`pdftotext`** (from [poppler](https://poppler.freedesktop.org/)) —
+  *optional*, only needed to parse **PDF** config prints server-side. Without it
+  the app still runs and accepts pre-extracted `.txt` prints (PDF upload
+  degrades gracefully). Install with `brew install poppler` (macOS) or
+  `sudo apt-get install -y poppler-utils` (Debian/Ubuntu).
+- **TCP reachability** to each controller's RRCS port (default `8193`) — only if
+  you use the live-RRCS source. The offline config-print source needs no
+  controller access at all.
+
+### 1. Install
 
 ```bash
-npm install
-npm start                                 # → http://localhost:8080
+git clone https://github.com/maxajbarlow/intercom-matrix.git
+cd intercom-matrix
+npm install        # no native build steps — pure-JS deps + built-in node:sqlite
 ```
 
-Then **open the app** — on a fresh install a four-step **first-run wizard**
+### 2. Run
+
+```bash
+npm start          # → http://localhost:8080
+```
+
+Serve on a different port with `PORT=9000 npm start`. The process logs the URL
+and each system's connection status on boot. Stop it with Ctrl-C; nothing is
+written outside the project directory (state lives in `data/`, `systems.json`,
+and `settings.json`, all gitignored).
+
+### 3. First-run wizard
+
+Open the URL in a browser. On a fresh install a four-step **first-run wizard**
 walks you through it:
 
 1. **Create the admin account** (scrypt-hashed locally; this is your way in).
@@ -122,6 +154,53 @@ commit only `systems.example.json`.
 | `RRCS_ENABLED` | `off` | **seed** for the live-polling toggle on first run; thereafter `settings.json` is the source of truth |
 | `ONBOARDING_OPEN` | `on` | allow the first-run wizard to create the first admin without auth (locks once one exists). Set `0` to require the env bootstrap admin instead |
 | `PRINTS_DIR` | `./prints` | where uploaded config prints are versioned (gitignored) |
+
+See [`.env.example`](.env.example) for the full list, including the
+authentication and cookie variables.
+
+### Run with Docker
+
+A [`Dockerfile`](Dockerfile) is included (Node 25 + `poppler-utils`). Build the
+image, then run it with your `systems.json` mounted and the SQLite databases on
+a named volume so they survive container replacement:
+
+```bash
+docker build -t intercom-matrix .
+
+docker run -d --name intercom-matrix \
+  -p 8080:8080 \
+  -v "$PWD/systems.json:/app/systems.json:ro" \
+  -v intercom-data:/data \
+  -e RRCS_ENABLED=on \
+  -e LOCAL_ADMIN_USER=admin -e LOCAL_ADMIN_PASS='change-me' \
+  intercom-matrix
+```
+
+- The image sets `REQUESTS_DIR=/data`; the `intercom-data` volume holds the
+  request and auth databases. Mount `systems.json` read-only so controller IPs
+  are never baked into the image.
+- A `HEALTHCHECK` polls `/api/systems` (returns 200 even with zero systems).
+- Behind a TLS proxy, add `-e COOKIE_SECURE=1`.
+
+### Production checklist
+
+- **TLS:** serve behind a TLS-terminating reverse proxy and set `COOKIE_SECURE=1`
+  so session cookies carry the `Secure` flag. The app deliberately does **not**
+  trust `X-Forwarded-*` headers (see the note in `server.js`).
+- **At-rest key:** set a stable `IMX_SECRET_KEY` (32 bytes, base64) so in-app
+  LDAP/SAML secrets survive a redeploy; otherwise one is generated at
+  `data/.secret-key` on first run.
+- **Break-glass admin:** provide `LOCAL_ADMIN_USER` / `LOCAL_ADMIN_PASS` so you
+  always have a way in, then turn on **Require login** (Settings → Safety) if the
+  network isn't trusted. See [Authentication](#authentication) for LDAP / SAML.
+- **Persist `data/`:** it holds the request and auth databases (the only state
+  not re-derivable from a config print).
+
+### Run the tests
+
+```bash
+npm test     # node --test — unit + HTTP integration tests, no extra setup
+```
 
 ## Settings (configuring a customer deployment)
 
