@@ -1,0 +1,35 @@
+[
+  {
+    "id": "studio-a",
+    "name": "Studio A",
+    "host": "",
+    "port": 8193,
+    "config": "",
+    "topology": ""
+  },
+  {
+    "id": "studio-b",
+    "name": "Studio B",
+    "host": "",
+    "port": 8193,
+    "config": "",
+    "topology": ""
+  },
+  {
+    "id": "control-room",
+    "name": "Control Room",
+    "host": "",
+    "port": 8193,
+    "config": "",
+    "topology": ""
+  },
+  {
+    "id": "virtual",
+    "name": "Virtual",
+    "host": "",
+    "port": 8193,
+    "config": "",
+    "topology": "",
+    "vsp": "data/vsp-export.json"
+  }
+]

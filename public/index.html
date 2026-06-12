@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Intercom Matrix</title>
+  <script>
+    // Allow hosting under a reverse-proxy sub-path (e.g. a Tailscale
+    // /<unique>/ mount): inject a <base> so relative asset and /api URLs
+    // resolve under the mount path even if the trailing slash is omitted.
+    (function () {
+      var p = location.pathname;
+      if (!/\/$/.test(p)) {
+        var b = document.createElement('base');
+        b.href = p + '/';
+        document.head.appendChild(b);
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="onboarding.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>Intercom Matrix</h1>
+      <span class="sub" id="subtitle">Live intercom matrix</span>
+    </div>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-view="matrix">Matrix</button>
+      <button class="tab" data-view="conferences">Conferences</button>
+      <button class="tab" data-view="panels">Panels</button>
+      <button class="tab" data-view="requests">Requests <span class="tab-badge" id="reqBadge"></span></button>
+      <button class="tab" data-view="workorder">Work order <span class="tab-badge" id="woBadge"></span></button>
+    </nav>
+
+    <div class="controls">
+      <label class="system">
+        <span>System</span>
+        <select id="systemSelect"></select>
+      </label>
+      <label class="auto">
+        <span>Auto</span>
+        <select id="autoSelect">
+          <option value="0">Off</option>
+          <option value="10">10s</option>
+          <option value="30" selected>30s</option>
+          <option value="60">1m</option>
+          <option value="300">5m</option>
+        </select>
+      </label>
+      <button class="btn primary" id="refreshBtn">Refresh</button>
+      <div class="profile" id="profile">
+        <button class="profile-btn" id="profileBtn" title="Account" aria-haspopup="menu" aria-expanded="false">
+          <span class="profile-av" id="profileAv">◐</span>
+        </button>
+        <div class="profile-menu hidden" id="profileMenu"></div>
+      </div>
+    </div>
+  </header>
+
+  <div class="statusbar" id="statusbar">
+    <span id="statusText">Connecting…</span>
+    <span class="spacer"></span>
+    <span id="countText"></span>
+    <span id="updatedText"></span>
+  </div>
+
+  <main id="main">
+    <!-- Matrix view -->
+    <section class="view" id="view-matrix">
+      <div class="toolbar">
+        <input type="search" id="mxRowSearch" placeholder="filter panels (rows)…" />
+        <input type="search" id="mxColSearch" placeholder="filter conferences (columns)…" />
+        <select id="mxNode" class="topo-sel" title="filter rows by node" hidden></select>
+        <select id="mxCard" class="topo-sel" title="filter rows by card/bay" hidden></select>
+        <label class="chk"><input type="checkbox" id="mxPanelsOnly" /> panels only</label>
+        <label class="chk"><input type="checkbox" id="mxKeyAccess" checked /> show key-access</label>
+        <label class="chk"><input type="checkbox" id="mxPending" /> pending changes</label>
+        <span class="legend">
+          <span class="lg talk">Talk</span>
+          <span class="lg listen">Listen</span>
+          <span class="lg both">Both</span>
+          <span class="lg key">Via key</span>
+          <span class="lg padd">+ pending</span>
+          <span class="lg prem">− pending</span>
+        </span>
+        <span class="grow"></span>
+        <span class="hint" id="mxHint"></span>
+      </div>
+      <div class="grid-wrap" id="mxWrap"><div class="grid" id="mxGrid"></div></div>
+    </section>
+
+    <!-- Conferences view -->
+    <section class="view hidden" id="view-conferences">
+      <div class="split">
+        <aside class="list">
+          <input type="search" id="confSearch" placeholder="search conferences…" />
+          <label class="sort-row">
+            <span>Sort</span>
+            <select id="confSort" class="sort-sel">
+              <option value="name">Name (A→Z)</option>
+              <option value="name-desc">Name (Z→A)</option>
+              <option value="alias">Alias (A→Z)</option>
+              <option value="members-desc">Members (most first)</option>
+              <option value="members-asc">Members (fewest first)</option>
+            </select>
+          </label>
+          <ul id="confList"></ul>
+        </aside>
+        <div class="detail" id="confDetail">
+          <div class="empty">Select a conference to see its members.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Panels view -->
+    <section class="view hidden" id="view-panels">
+      <div class="split">
+        <aside class="list">
+          <input type="search" id="panelSearch" placeholder="search panels / ports…" />
+          <div class="topo-filters">
+            <select id="pnNode" class="topo-sel" hidden></select>
+            <select id="pnCard" class="topo-sel" hidden></select>
+          </div>
+          <ul id="panelList"></ul>
+        </aside>
+        <div class="detail" id="panelDetail">
+          <div class="empty">Select a panel to see every conference it belongs to.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Requests view: file & track change requests -->
+    <section class="view hidden" id="view-requests">
+      <div class="req-topbar">
+        <div class="req-topbar-title">Requests <span class="muted">— file &amp; track changes</span></div>
+        <div class="req-topbar-actions">
+          <button class="btn small primary" id="reqNew">+ New request</button>
+        </div>
+      </div>
+      <div class="req-queue" id="reqQueue">
+        <div class="req-filters" id="reqFilters"></div>
+        <div class="req-table-wrap" id="reqTableWrap">
+          <table class="req-table">
+            <thead><tr><th class="rt-id">#</th><th>Title</th><th class="rt-who">Requester</th><th class="rt-changes">Changes</th><th class="rt-status">Status</th><th class="rt-when">Updated</th></tr></thead>
+            <tbody id="reqRows"></tbody>
+          </table>
+        </div>
+        <div class="req-detail hidden" id="reqDetail"></div>
+      </div>
+    </section>
+
+    <!-- Work order view: consolidated do-list across all open requests -->
+    <section class="view hidden" id="view-workorder">
+      <div class="req-workorder" id="reqWorkOrder"></div>
+    </section>
+
+    <!-- Settings view: deployment configuration + data sources (Sources section) -->
+    <section class="view hidden" id="view-settings">
+      <!-- persistent hidden file inputs (the Sources section panel re-renders) -->
+      <input type="file" id="logoFile" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif" hidden />
+      <input type="file" id="cfgFile" accept=".art,.Art,.ash" hidden />
+      <input type="file" id="topoFile" accept=".txt,.log,.tree" hidden />
+      <input type="file" id="printFile" accept=".pdf,.txt" hidden />
+      <div class="settings-wrap" id="settingsWrap"></div>
+    </section>
+  </main>
+
+  <!-- Request composer (membership changes OR new conference) -->
+  <div class="modal-backdrop hidden" id="composer">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="composerTitle">New request</h3>
+        <button class="modal-x" id="composerClose" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <label class="fld"><span>Title</span><input type="text" id="cTitle" placeholder="Short summary (optional)" /></label>
+        <div class="fld"><span>Changes</span><div class="composer-changes" id="cChanges"></div></div>
+        <div class="builder" id="cAddRow">
+          <div class="op-picker" id="cOpPicker">
+            <div class="op-group">
+              <div class="op-group-h">On a panel</div>
+              <div class="op-chips">
+                <button type="button" class="op-chip active" data-op="add_member"><span class="op-ic add">＋</span>Add conference</button>
+                <button type="button" class="op-chip" data-op="remove_member"><span class="op-ic rem">－</span>Remove conference</button>
+                <button type="button" class="op-chip" data-op="change_direction"><span class="op-ic dir">⇄</span>Change Talk / Listen</button>
+              </div>
+            </div>
+            <div class="op-group">
+              <div class="op-group-h">A conference</div>
+              <div class="op-chips">
+                <button type="button" class="op-chip" data-op="create_conference"><span class="op-ic add">✦</span>Create</button>
+                <button type="button" class="op-chip" data-op="rename_conference"><span class="op-ic dir">✎</span>Rename / edit</button>
+                <button type="button" class="op-chip danger" data-op="delete_conference"><span class="op-ic rem">✕</span>Delete</button>
+              </div>
+            </div>
+          </div>
+          <div class="combo bf" data-for="conf" id="cConfWrap">
+            <div class="combo-chips hidden" id="cConfChips"></div>
+            <input type="text" id="cConfInput" class="combo-input" placeholder="Search conference…" autocomplete="off" />
+            <div class="combo-list hidden" id="cConfList"></div>
+          </div>
+          <div class="combo bf" data-for="panel" id="cPanelWrap">
+            <div class="combo-chips hidden" id="cPanelChips"></div>
+            <input type="text" id="cPanelInput" class="combo-input" placeholder="Search panel…" autocomplete="off" />
+            <div class="combo-list hidden" id="cPanelList"></div>
+          </div>
+          <div class="row2 bf" data-for="newconf" id="cNewConfWrap">
+            <input type="text" id="cNewName" placeholder="New conference name" />
+            <input type="text" id="cNewLabel" placeholder="Alias (optional)" />
+          </div>
+          <div class="row2 bf" data-for="rename" id="cRenameWrap">
+            <input type="text" id="cRenameName" placeholder="New name" />
+            <input type="text" id="cRenameLabel" placeholder="New alias (optional)" />
+          </div>
+          <div class="danger-note bf" data-for="delete" id="cDeleteNote">⚠ Requests deleting the entire conference and all its keys.</div>
+          <div class="builder-foot">
+            <div class="dir-toggle bf" data-for="dir" id="cDirWrap">
+              <button type="button" class="dir-pill active" data-dir="talk">Talk</button>
+              <button type="button" class="dir-pill active" data-dir="listen">Listen</button>
+            </div>
+            <button class="btn small primary" id="cAddBtn">Add change</button>
+          </div>
+        </div>
+        <label class="fld"><span>Justification (optional)</span><textarea id="cJustify" rows="2" placeholder="Why is this needed?"></textarea></label>
+        <div class="composer-msg" id="cMsg"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="composerCancel">Cancel</button>
+        <button class="btn primary" id="composerSubmit">Submit request</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sign-in / account panel (local · LDAP · SAML). Body is rendered by app.js
+       so it can switch between the login form and the signed-in account view. -->
+  <div class="modal-backdrop hidden" id="authModal">
+    <div class="modal modal-sm" id="authCard">
+      <div class="modal-head">
+        <h3 id="authTitle">Sign in</h3>
+        <button class="modal-x" id="authClose" aria-label="Close">×</button>
+      </div>
+      <div class="modal-body" id="authBody"></div>
+    </div>
+  </div>
+
+  <!-- First-run wizard loads before app.js so init() can hand off to it. -->
+  <script src="onboarding.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

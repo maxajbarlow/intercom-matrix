@@ -1,0 +1,19 @@
+{
+  "name": "intercom-matrix",
+  "version": "1.1.0",
+  "description": "Live intercom matrix viewer — read-only via RRCS. Hostable, multi-client, auto-refreshing.",
+  "main": "server.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@node-saml/node-saml": "^5.1.0",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.0",
+    "express-rate-limit": "^8.5.2",
+    "ldapts": "^8.1.8",
+    "ws": "^8.21.0"
+  }
+}

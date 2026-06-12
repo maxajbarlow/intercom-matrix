@@ -1,0 +1,29 @@
+node_modules/
+*.log
+.DS_Store
+
+# Browser-driven test artifacts (Playwright MCP)
+.playwright-mcp/
+
+# Local config — contains controller IPs; copy systems.example.json -> systems.json
+systems.json
+
+# Deployment settings (branding, display defaults, roster); copy settings.example.json -> settings.json
+settings.json
+settings.json.tmp
+
+# controller config snapshots / data (never commit production config)
+*.ash
+*.Art
+*.art
+data/
+
+# Node-topology trees (port inventory) — local only, like systems.json
+topology/*
+!topology/README.md
+
+# config prints (resolved key programming) — local only, like topology
+prints/*
+!prints/README.md
+
+# VSP export JSON (holds production config) — local only, lives under data/

@@ -1,0 +1,27 @@
+# Dependencies — reinstalled in the image via `npm ci`
+node_modules/
+
+# Local config: holds controller IPs. NEVER bake into the image; mount at runtime.
+systems.json
+
+# Runtime/local state — re-derivable or machine-local; mount as volumes instead.
+data/
+prints/*
+!prints/README.md
+topology/*
+!topology/README.md
+
+# controller config snapshots (never ship production config)
+*.ash
+*.Art
+*.art
+
+# VCS / tooling / scratch
+.git/
+.gitignore
+*.log
+.playwright-mcp/
+*.png
+README.md
+Dockerfile
+.dockerignore
