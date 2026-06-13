@@ -190,29 +190,54 @@ commit only `systems.example.json`.
 See [`.env.example`](.env.example) for the full list, including the
 authentication and cookie variables.
 
-### Run with Docker
+### Run with Docker (simplest — no Node, no clone, no build)
 
-A [`Dockerfile`](Dockerfile) is included (Node 25 + `poppler-utils`). Build the
-image, then run it with your `systems.json` mounted and the SQLite databases on
-a named volume so they survive container replacement:
+The app is published as a ready-to-run image with the PDF tool (`pdftotext`)
+already inside. If you have Docker, one command runs everything:
+
+```bash
+docker run -d --name intercom-matrix -p 8080:8080 \
+  -v intercom-data:/data \
+  ghcr.io/maxajbarlow/intercom-matrix
+```
+
+Then open **http://localhost:8080** — the first-run wizard does the rest. The
+`intercom-data` volume keeps the request and login databases across restarts.
+
+**No Docker yet?** Install it once, then run the command above:
+
+- **Windows / macOS** — install [Docker Desktop](https://www.docker.com/products/docker-desktop/), open it, then run the command.
+- **Linux** — `curl -fsSL https://get.docker.com | sh`
+
+**Update** to the latest version any time:
+
+```bash
+docker pull ghcr.io/maxajbarlow/intercom-matrix
+docker rm -f intercom-matrix          # then re-run the docker run command above
+```
+
+#### Options
+
+Add any of these to the `docker run` command:
+
+| Goal | Add |
+|------|-----|
+| Live RRCS controllers | `-v "$PWD/systems.json:/app/systems.json:ro" -e RRCS_ENABLED=on` |
+| Break-glass admin | `-e LOCAL_ADMIN_USER=admin -e LOCAL_ADMIN_PASS='change-me'` |
+| Behind a TLS proxy | `-e COOKIE_SECURE=1` |
+| Different port | `-p 9000:8080` |
+
+A `HEALTHCHECK` polls `/api/systems` (200 even with zero systems). Mount
+`systems.json` read-only so controller IPs are never baked into the image.
+
+#### Build it yourself instead
+
+Prefer to build from source rather than pull the published image?
 
 ```bash
 docker build -t intercom-matrix .
-
-docker run -d --name intercom-matrix \
-  -p 8080:8080 \
-  -v "$PWD/systems.json:/app/systems.json:ro" \
-  -v intercom-data:/data \
-  -e RRCS_ENABLED=on \
-  -e LOCAL_ADMIN_USER=admin -e LOCAL_ADMIN_PASS='change-me' \
-  intercom-matrix
+docker run -d --name intercom-matrix -p 8080:8080 -v intercom-data:/data intercom-matrix
 ```
-
-- The image sets `REQUESTS_DIR=/data`; the `intercom-data` volume holds the
-  request and auth databases. Mount `systems.json` read-only so controller IPs
-  are never baked into the image.
-- A `HEALTHCHECK` polls `/api/systems` (returns 200 even with zero systems).
-- Behind a TLS proxy, add `-e COOKIE_SECURE=1`.
 
 ### Production checklist
 
