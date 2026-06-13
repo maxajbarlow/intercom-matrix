@@ -44,9 +44,14 @@ Pass flags through the `.bat`:
   declined the admin prompt, install it manually from
   <https://aka.ms/vs/17/release/vc_redist.x64.exe> and re-run. The app runs fine
   without it — you just upload pre-extracted `.txt` prints instead of PDFs.
-- **Script won't run / "running scripts is disabled".** The `.bat` already calls
-  PowerShell with `-ExecutionPolicy Bypass`, so double-clicking the `.bat` is the
-  supported path. Don't run the `.ps1` directly unless you pass the same flag.
+- **"…install.ps1 is not digitally signed" / "running scripts is disabled".**
+  This is the PowerShell **execution policy** blocking an unsigned, downloaded
+  script. You don't need to change any policy: always launch via
+  **`Install and Run.bat`**, which runs the script through `Invoke-Expression`
+  rather than as a file — so it works even when the policy is `AllSigned` /
+  `RemoteSigned` or locked down by Group Policy (where `-ExecutionPolicy Bypass`
+  is ignored). Running the `.ps1` directly *will* be blocked on such machines;
+  use the `.bat`.
 - **Air-gapped machine (no internet).** Pre-install Node 24+ (or drop a portable
   Node into `.node\`) and commit/copy a populated `node_modules\` over, then run
   `Install and Run.bat` — it will skip every download and just launch.

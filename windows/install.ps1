@@ -14,22 +14,34 @@
   Re-running is safe and idempotent: existing Node and up-to-date dependencies
   are reused, so day-to-day this doubles as the launcher.
 
-  Usage (normally via "Install and Run.bat"):
-    powershell -ExecutionPolicy Bypass -File windows\install.ps1 [-Port 8080] [-NoBrowser] [-NoStart]
+  Launched by "Install and Run.bat", which pipes this file through
+  Invoke-Expression rather than running it as a .ps1. That matters: a downloaded
+  script is unsigned, and under an AllSigned/RemoteSigned execution policy - the
+  default on many managed Windows machines - an unsigned .ps1 is blocked. When
+  the policy is set by Group Policy, even `-ExecutionPolicy Bypass` is ignored.
+  IEX'd content is not a "script file", so it runs regardless of policy.
+
+  Two consequences of being run via IEX (instead of as a file):
+    - there is no $MyInvocation file path, so the project root comes from
+      $env:IMX_ROOT (set by the .bat), with fallbacks for direct invocation;
+    - a param() block isn't valid, so options are read from environment
+      variables (the .bat maps -Port / -NoBrowser / -NoStart onto these).
 #>
-[CmdletBinding()]
-param(
-  [int]$Port = $(if ($env:PORT) { [int]$env:PORT } else { 8080 }),
-  [switch]$NoBrowser,
-  [switch]$NoStart
-)
 
 $ErrorActionPreference = 'Stop'
 # Some older Windows builds default to TLS 1.0; force modern TLS for the downloads.
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Root      = Split-Path -Parent $ScriptDir
+# Options (env vars; "Install and Run.bat" maps its flags onto these).
+$Port      = if ($env:IMX_PORT) { [int]$env:IMX_PORT } elseif ($env:PORT) { [int]$env:PORT } else { 8080 }
+$NoBrowser = ($env:IMX_NOBROWSER -eq '1')
+$NoStart   = ($env:IMX_NOSTART -eq '1')
+
+# Project root: from the .bat, else infer it when the file is invoked directly.
+if     ($env:IMX_ROOT)  { $Root = $env:IMX_ROOT.TrimEnd('\') }
+elseif ($PSScriptRoot)  { $Root = Split-Path -Parent $PSScriptRoot }
+elseif ($PSCommandPath) { $Root = Split-Path -Parent (Split-Path -Parent $PSCommandPath) }
+else                    { $Root = (Get-Location).Path }
 Set-Location $Root
 
 function Info($m) { Write-Host "  $m" -ForegroundColor Cyan }
