@@ -78,18 +78,30 @@ keeps the **last good data** (shown as *stale*) rather than blanking out.
 ### Windows: one-click setup
 
 On a clean Windows 10/11 or Windows Server machine — even with **no Node.js
-installed** — you don't need the manual steps below. Get the project onto the box
-(`git clone`, or download the repo ZIP from GitHub and extract), then **double-click
-`Install and Run.bat`** in the project root. It will, with no admin rights:
+installed** — you don't need the manual steps below:
+
+1. On the **[GitHub repo](https://github.com/maxajbarlow/intercom-matrix)**, click
+   **Code → Download ZIP** (or `git clone`), then extract it.
+2. Open the extracted folder and **double-click `Install and Run.bat`**.
+3. The first time, Windows **SmartScreen** may say *"Windows protected your PC"* —
+   click **More info → Run anyway** (it's an unrecognised download, not a problem).
+
+It then does the rest, with no admin rights needed (one UAC prompt only if the
+Visual C++ runtime has to be installed):
 
 1. Download a **portable** Node.js 24+ into `.node\` if you don't already have one.
-2. Ensure the Visual C++ runtime the bundled `pdftotext` needs (UAC prompt only if missing).
+2. Ensure the Visual C++ runtime the bundled `pdftotext` needs.
 3. `npm ci` the dependencies (needs internet, one time).
 4. Start the server and open **http://localhost:8080**.
 
 Run it again any time to launch — installed bits are reused. Pass flags through the
-`.bat`: `"Install and Run.bat" -Port 9000`, `-NoBrowser`, `-NoStart`. Full details,
-air-gapped instructions, and troubleshooting are in [`windows/README.md`](windows/README.md).
+`.bat`: `"Install and Run.bat" -Port 9000`, `-NoBrowser`, `-NoStart`.
+
+> **Always launch via `Install and Run.bat`, not the `.ps1` directly.** A
+> downloaded `install.ps1` is unsigned and will be blocked by PowerShell's
+> execution policy (*"…is not digitally signed"*); the `.bat` runs it in a way
+> that works regardless of policy. Full details, air-gapped instructions, and
+> troubleshooting are in [`windows/README.md`](windows/README.md).
 
 The manual steps below also work on Windows (PowerShell/CMD) if you'd rather install
 Node yourself.
