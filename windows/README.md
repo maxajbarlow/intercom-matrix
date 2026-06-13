@@ -39,11 +39,23 @@ Pass flags through the `.bat`:
 
 ## Notes & troubleshooting
 
-- **"pdftotext still missing" / PDF prints won't parse.** The bundled tool needs
-  the Microsoft Visual C++ runtime. Step 2 installs it automatically, but if you
-  declined the admin prompt, install it manually from
-  <https://aka.ms/vs/17/release/vc_redist.x64.exe> and re-run. The app runs fine
-  without it — you just upload pre-extracted `.txt` prints instead of PDFs.
+- **Is PDF upload going to work?** Near the end, the installer prints one of:
+  - `PDF config-print upload: ENABLED` — you're done; PDF uploads will parse.
+  - `PDF config-print upload: DISABLED` — the Microsoft Visual C++ runtime isn't
+    installed (Step 2 needs admin; you declined the prompt or lack rights). The app
+    still runs — upload pre-extracted `.txt` prints — and PDFs start working once you
+    install <https://aka.ms/vs/17/release/vc_redist.x64.exe> and re-run. If you try a
+    PDF without it, the app tells you exactly this rather than a cryptic error.
+- **"This looks like it's running from inside the ZIP."** You double-clicked the
+  `.bat` without extracting. Right-click the `.zip` → **Extract All**, then run it
+  from the extracted folder.
+- **Downloads fail / "a proxy or firewall is blocking nodejs.org".** The installer
+  auto-uses your system proxy (with your Windows credentials) for Node, the VC++
+  runtime, and npm. If it still can't reach `nodejs.org` / `registry.npmjs.org` /
+  `aka.ms`, ask IT to allow those, or pre-stage Node + `node_modules\` (see
+  air-gapped below).
+- **"Port 8080 is already in use."** Something else holds the port. Re-run as
+  `"Install and Run.bat" -Port 9000` (or any free port).
 - **"…install.ps1 is not digitally signed" / "running scripts is disabled".**
   This is the PowerShell **execution policy** blocking an unsigned, downloaded
   script. You don't need to change any policy: always launch via

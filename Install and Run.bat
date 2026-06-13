@@ -16,6 +16,21 @@ setlocal
 cd /d "%~dp0"
 set "IMX_ROOT=%~dp0"
 
+REM Guard against double-clicking this from INSIDE the ZIP preview (no extraction):
+REM the windows\ folder won't be alongside the .bat, so nothing can run. Tell the
+REM user to Extract All first.
+if not exist "%~dp0windows\install.ps1" (
+  echo.
+  echo   This looks like it's running from inside the ZIP, or the download is incomplete.
+  echo   windows\install.ps1 is missing next to this file.
+  echo.
+  echo   Fix: right-click the downloaded .zip -^> "Extract All...", then open the
+  echo   extracted folder and double-click "Install and Run.bat" from there.
+  echo.
+  pause
+  exit /b 1
+)
+
 REM Map optional flags onto environment variables. install.ps1 reads these
 REM instead of using a param() block, because it is launched via
 REM Invoke-Expression (see below), where param() is not available.

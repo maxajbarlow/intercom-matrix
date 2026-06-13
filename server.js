@@ -329,7 +329,7 @@ app.post('/api/requests-backup', (req, res) => { try { res.json(requests.backup(
 // --- Static SPA --------------------------------------------------------------
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   const defs = svc.init();
   // Suppress the first-run wizard for deployments that were configured before it
   // existed (admin present, a system fed, or the login wall on). A truly fresh
@@ -348,4 +348,18 @@ app.listen(PORT, () => {
     svc.refresh(d.id, { force: true }).then((s) => console.log(`  [${d.id}] ${s.ok ? 'ok — ' + JSON.stringify(s.counts) : 'failed — ' + s.error}`)).catch(() => {});
     if (REFRESH_SEC > 0) setInterval(() => svc.refresh(d.id, { force: true }).catch(() => {}), REFRESH_SEC * 1000);
   }
+});
+
+// Friendly startup failures — the common one on a shared box is the port already
+// being taken, which otherwise prints an unhelpful stack trace.
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n  ERROR: port ${PORT} is already in use — another program (or a second copy`);
+    console.error('  of Intercom Matrix) is using it. Close that, or start on another port:');
+    console.error('    Windows:        set PORT=9000   (then re-run "Install and Run.bat")');
+    console.error('    macOS / Linux:  PORT=9000 npm start\n');
+  } else {
+    console.error('  Server failed to start:', err.message);
+  }
+  process.exit(1);
 });
