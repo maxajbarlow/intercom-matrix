@@ -16,6 +16,10 @@ topology/*
 *.Art
 *.art
 
+# Vendored Windows poppler binaries — the Linux image installs poppler-utils
+# via apt (see Dockerfile), so these ~24MB of .exe/.dll are dead weight here.
+vendor/poppler/win-x64/
+
 # VCS / tooling / scratch
 .git/
 .gitignore

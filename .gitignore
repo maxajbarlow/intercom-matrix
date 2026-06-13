@@ -2,6 +2,10 @@ node_modules/
 *.log
 .DS_Store
 
+# Portable Node.js downloaded by the Windows one-click installer (windows/install.ps1)
+.node/
+.node-tmp/
+
 # Browser-driven test artifacts (Playwright MCP)
 .playwright-mcp/
 

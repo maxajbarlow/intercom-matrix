@@ -1,0 +1,6 @@
+# Windows launch scripts must check out with CRLF line endings so cmd.exe and
+# PowerShell parse them reliably — regardless of the cloner's core.autocrlf
+# setting, and including GitHub "Download ZIP" (git archive honors these rules).
+# Stored as LF in the repo, converted to CRLF in the working tree on checkout.
+*.bat text eol=crlf
+*.ps1 text eol=crlf

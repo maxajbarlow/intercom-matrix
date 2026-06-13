@@ -4,6 +4,9 @@
   "description": "Live intercom matrix viewer — read-only via RRCS. Hostable, multi-client, auto-refreshing.",
   "main": "server.js",
   "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "start": "node server.js",
     "test": "node --test"

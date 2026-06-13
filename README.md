@@ -69,10 +69,30 @@ keeps the **last good data** (shown as *stale*) rather than blanking out.
   *optional*, only needed to parse **PDF** config prints server-side. Without it
   the app still runs and accepts pre-extracted `.txt` prints (PDF upload
   degrades gracefully). Install with `brew install poppler` (macOS) or
-  `sudo apt-get install -y poppler-utils` (Debian/Ubuntu).
+  `sudo apt-get install -y poppler-utils` (Debian/Ubuntu). **On Windows it's
+  bundled** (`vendor/poppler/win-x64`) and resolved automatically — no install.
 - **TCP reachability** to each controller's RRCS port (default `8193`) — only if
   you use the live-RRCS source. The offline config-print source needs no
   controller access at all.
+
+### Windows: one-click setup
+
+On a clean Windows 10/11 or Windows Server machine — even with **no Node.js
+installed** — you don't need the manual steps below. Get the project onto the box
+(`git clone`, or download the repo ZIP from GitHub and extract), then **double-click
+`Install and Run.bat`** in the project root. It will, with no admin rights:
+
+1. Download a **portable** Node.js 24+ into `.node\` if you don't already have one.
+2. Ensure the Visual C++ runtime the bundled `pdftotext` needs (UAC prompt only if missing).
+3. `npm ci` the dependencies (needs internet, one time).
+4. Start the server and open **http://localhost:8080**.
+
+Run it again any time to launch — installed bits are reused. Pass flags through the
+`.bat`: `"Install and Run.bat" -Port 9000`, `-NoBrowser`, `-NoStart`. Full details,
+air-gapped instructions, and troubleshooting are in [`windows/README.md`](windows/README.md).
+
+The manual steps below also work on Windows (PowerShell/CMD) if you'd rather install
+Node yourself.
 
 ### 1. Install
 
