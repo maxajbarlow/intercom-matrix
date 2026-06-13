@@ -4,12 +4,28 @@ node_modules/
 # Local config: holds controller IPs. NEVER bake into the image; mount at runtime.
 systems.json
 
+# Deployment settings — gitignored local state. If baked in, a developer's
+# settings.json (with meta.onboardedAt stamped) suppresses the first-run wizard
+# in the container and leaks local branding. Mount at runtime, like systems.json.
+settings.json
+settings.json.tmp
+
 # Runtime/local state — re-derivable or machine-local; mount as volumes instead.
 data/
 prints/*
 !prints/README.md
 topology/*
 !topology/README.md
+
+# VSP secrets and exports — hold production config; never ship in the image.
+vsp/.token
+vsp/.env
+vsp/data/
+vsp/out/
+
+# Portable Node downloaded by the Windows installer — irrelevant to the Linux image.
+.node/
+.node-tmp/
 
 # controller config snapshots (never ship production config)
 *.ash
@@ -23,9 +39,14 @@ vendor/poppler/win-x64/
 # VCS / tooling / scratch
 .git/
 .gitignore
+.gitattributes
 *.log
 .playwright-mcp/
+.DS_Store
 *.png
+
+# Windows one-click installer — useless in a Linux image.
+windows/
 README.md
 Dockerfile
 .dockerignore
