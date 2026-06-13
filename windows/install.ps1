@@ -32,6 +32,23 @@ $ErrorActionPreference = 'Stop'
 # Some older Windows builds default to TLS 1.0; force modern TLS for the downloads.
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
+# Honor an authenticated corporate proxy (common on managed networks). Invoke-
+# WebRequest uses the system proxy but won't send credentials to an authenticating
+# one by default; wire in default creds, and hand the same proxy to npm via the
+# env vars it reads. All best-effort: a box with no proxy is unaffected.
+try {
+  $sysProxy = [System.Net.WebRequest]::GetSystemWebProxy()
+  $sysProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
+  [System.Net.WebRequest]::DefaultWebProxy = $sysProxy
+  $PSDefaultParameterValues['Invoke-WebRequest:ProxyUseDefaultCredentials'] = $true
+  $PSDefaultParameterValues['Invoke-RestMethod:ProxyUseDefaultCredentials'] = $true
+  $npmProxy = $sysProxy.GetProxy('https://registry.npmjs.org/')
+  if ($npmProxy -and $npmProxy.Host -ne 'registry.npmjs.org') {
+    if (-not $env:HTTPS_PROXY) { $env:HTTPS_PROXY = $npmProxy.AbsoluteUri }
+    if (-not $env:HTTP_PROXY)  { $env:HTTP_PROXY  = $npmProxy.AbsoluteUri }
+  }
+} catch { }
+
 # Options (env vars; "Install and Run.bat" maps its flags onto these).
 $Port      = if ($env:IMX_PORT) { [int]$env:IMX_PORT } elseif ($env:PORT) { [int]$env:PORT } else { 8080 }
 $NoBrowser = ($env:IMX_NOBROWSER -eq '1')
@@ -101,24 +118,30 @@ if (-not $NodeExe) {
   $ver = $pick.version
   $arch = "x64"
   if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { $arch = "arm64" }
-  elseif (-not [Environment]::Is64BitOperatingSystem)   { $arch = "x86" }
+  elseif (-not [Environment]::Is64BitOperatingSystem) {
+    Die "This is 32-bit Windows, for which Node.js $MinNodeMajor+ ships no build. Use a 64-bit Windows machine, or install Node $MinNodeMajor+ manually and re-run."
+  }
 
   $zipName = "node-$ver-win-$arch.zip"
   $url     = "https://nodejs.org/dist/$ver/$zipName"
   $zipPath = Join-Path $env:TEMP $zipName
   $tmp     = Join-Path $Root ".node-tmp"
 
-  Info "Downloading $zipName ..."
-  Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
-  Info "Extracting ..."
-  if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
-  Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
-  $inner = Get-ChildItem $tmp -Directory | Select-Object -First 1
-  if (-not $inner) { Die "Node archive looked empty after extracting." }
-  if (Test-Path $LocalNodeDir) { Remove-Item $LocalNodeDir -Recurse -Force }
-  Move-Item $inner.FullName $LocalNodeDir
-  Remove-Item $tmp -Recurse -Force
-  Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+  try {
+    Info "Downloading $zipName ..."
+    Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+    Info "Extracting ..."
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+    Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
+    $inner = Get-ChildItem $tmp -Directory | Select-Object -First 1
+    if (-not $inner) { throw "the downloaded archive was empty or corrupt" }
+    if (Test-Path $LocalNodeDir) { Remove-Item $LocalNodeDir -Recurse -Force }
+    Move-Item $inner.FullName $LocalNodeDir
+    Remove-Item $tmp -Recurse -Force
+    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+  } catch {
+    Die "Couldn't download or unpack Node from nodejs.org ($($_.Exception.Message)). On a managed network this usually means a proxy or firewall is blocking nodejs.org - ask IT to allow it, or install Node $MinNodeMajor+ manually and re-run."
+  }
 
   $NodeExe = Join-Path $LocalNodeDir "node.exe"
   if (-not (Test-Path $NodeExe)) { Die "Node download failed - node.exe missing after extract." }
@@ -133,6 +156,7 @@ $Npm       = Join-Path $NodeDir "npm.cmd"
 # --- Step 2: ensure the VC++ runtime so bundled pdftotext can launch ----------
 Info "[2/4] Checking the bundled PDF tool (pdftotext)..."
 $Pdftotext = Join-Path $Root "vendor\poppler\win-x64\pdftotext.exe"
+$PdfReady  = $false   # true only when pdftotext can actually run (VC++ present)
 
 function Test-VCRedist {
   foreach ($k in @(
@@ -149,6 +173,7 @@ if (-not (Test-Path $Pdftotext)) {
   Warn "PDF config-print parsing will be unavailable; the app still runs (upload pre-extracted .txt prints)."
 }
 elseif (Test-VCRedist) {
+  $PdfReady = $true
   Ok "PDF tool ready (Visual C++ runtime present)."
 }
 else {
@@ -159,10 +184,10 @@ else {
     Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $vc -UseBasicParsing
     Info "Installing the VC++ runtime (may prompt for admin)..."
     Start-Process -FilePath $vc -ArgumentList "/install","/quiet","/norestart" -Wait -Verb RunAs | Out-Null
-    if (Test-VCRedist) { Ok "Visual C++ runtime installed." }
-    else { Warn "VC++ runtime not confirmed - PDF parsing may be unavailable, but everything else works (.txt prints)." }
+    if (Test-VCRedist) { $PdfReady = $true; Ok "Visual C++ runtime installed." }
+    else { Warn "VC++ runtime not confirmed - PDF parsing stays off, but everything else works (.txt prints)." }
   } catch {
-    Warn "Couldn't install the VC++ runtime automatically (admin declined?)."
+    Warn "Couldn't install the VC++ runtime automatically (admin declined, or no rights)."
     Warn "The app still runs; PDF config-print parsing stays off until it's installed. See windows\README.md."
   }
 }
@@ -192,6 +217,17 @@ if ($fresh) {
 }
 
 # --- Step 4: launch -----------------------------------------------------------
+# Make PDF capability unmissable: it's the one thing that silently won't work if
+# the VC++ runtime didn't get installed (declined UAC / no admin rights).
+Write-Host ""
+if ($PdfReady) {
+  Ok   "PDF config-print upload: ENABLED (Visual C++ runtime present)."
+} else {
+  Warn "PDF config-print upload: DISABLED - the Visual C++ runtime is not installed."
+  Warn "  To enable PDFs: install https://aka.ms/vs/17/release/vc_redist.x64.exe then re-run."
+  Warn "  The app works now; until then, upload pre-extracted .txt prints instead of PDFs."
+}
+
 if ($NoStart) {
   Write-Host ""
   Ok "Setup complete. Double-click 'Install and Run.bat' again any time to start the server."
