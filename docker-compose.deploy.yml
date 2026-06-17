@@ -1,55 +1,68 @@
-# Deployment compose for the VPS — pulls the published image from
-# reg.p1.riedel.events and lets Watchtower auto-update it on every :latest push.
+# Deployment compose for the VPS — adapted from IT's intercom-manager compose.
+# Runs on the external `v2075` macvlan at a fixed IP and is auto-updated by the
+# shared Watchtower (which watches containers carrying the enable label below).
 #
-# Usage on the server (in a directory holding a ./config dir):
-#   docker login reg.p1.riedel.events     # one-time; writes creds Watchtower reads
+# Differences from intercom-manager, by design:
+#   • IP 10.44.75.61 (manager is .60)
+#   • image reg.p1.riedel.events/intercom-matrix
+#   • no BOLERO_PIN (manager-only); admin creds + secrets come from ./.env
+#   • config split: systems.json/settings.json in /config, databases in /data
+#
+# ── ONE-TIME SETUP ON THE SERVER ────────────────────────────────────────────
+#   mkdir -p /root/containers/intercom-matrix/{data,config}
+#   # The image runs as the non-root `node` user (uid 1000); give it ownership
+#   # of the bind mounts or it can't write the request/auth DBs or persist config:
+#   chown -R 1000:1000 /root/containers/intercom-matrix/data /root/containers/intercom-matrix/config
+#   # Drop the systems list + deployment settings in (controller IPs etc.):
+#   cp systems.example.json  /root/containers/intercom-matrix/config/systems.json
+#   cp settings.example.json /root/containers/intercom-matrix/config/settings.json
+#   # Secrets live next to this compose, NEVER in git (see .env block below):
+#   #   /root/containers/intercom-matrix/.env
+#   docker login reg.p1.riedel.events     # one-time; lets the shared Watchtower pull
 #   docker compose -f docker-compose.deploy.yml pull
 #   docker compose -f docker-compose.deploy.yml up -d
 #
-# After this, the "Build and publish to Riedel registry" workflow pushing
-# reg.p1.riedel.events/intercom-matrix:latest is all it takes — Watchtower pulls
-# and recreates the container automatically within WATCHTOWER_POLL_INTERVAL.
+# Reachable at http://10.44.75.61/ on the v2075 network (PORT=80 in-container).
+#
+# ── /root/containers/intercom-matrix/.env (create by hand; keep out of git) ──
+#   LOCAL_ADMIN_USER=admin
+#   LOCAL_ADMIN_PASS=<choose-a-strong-password>
+#   # Optional but recommended — pin the at-rest encryption key (32 bytes base64):
+#   #   IMX_SECRET_KEY=<openssl rand -base64 32>
+#   # If omitted, a key is generated once and persisted to /data/.secret-key.
 
 services:
-  matrix:
+  intercom-matrix:
     image: reg.p1.riedel.events/intercom-matrix:latest
-    ports:
-      - "8080:8080"
-    environment:
-      # Config lives in the mounted ./config dir (writable, so the first-run
-      # wizard and in-app edits persist). systems.json holds controller IPs;
-      # settings.json holds branding/display/safety — both stay off the image.
-      SYSTEMS_FILE: /config/systems.json
-      SETTINGS_FILE: /config/settings.json
-      # Request, auth and vault databases live on the named volume below.
-      REQUESTS_DIR: /data
-      # Live RRCS polling is off by default; flip on once systems.json has hosts.
-      # RRCS_ENABLED: "on"
+    container_name: intercom-matrix
+    restart: always
     volumes:
-      # Writable config dir — survives recreation and lets the UI persist changes.
-      - ./config:/config
-      # Named volume keeps the request + login databases across container updates.
-      - intercom-data:/data
-    restart: unless-stopped
+      # Request / auth / vault databases (REQUESTS_DIR below points here).
+      - /root/containers/intercom-matrix/data:/data
+      # Writable config: systems.json (controller IPs) + settings.json (branding).
+      - /root/containers/intercom-matrix/config:/config
+    environment:
+      - PORT=80
+      - REQUESTS_DIR=/data
+      - SYSTEMS_FILE=/config/systems.json
+      - SETTINGS_FILE=/config/settings.json
+      # Live RRCS polling is off until systems.json has reachable hosts:
+      # - RRCS_ENABLED=on
+    env_file:
+      # Admin credentials + optional IMX_SECRET_KEY — kept out of git.
+      - .env
+    networks:
+      v2075:
+        ipv4_address: 10.44.75.61
     labels:
-      # Opt this container in — Watchtower below runs in label-enable mode,
-      # so only containers carrying this label get auto-updated.
-      - "com.centurylinklabs.watchtower.enable=true"
+      - com.centurylinklabs.watchtower.enable=true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  watchtower:
-    image: containrrr/watchtower:latest
-    restart: unless-stopped
-    volumes:
-      # Talk to the host Docker daemon to recreate containers.
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Registry credentials from `docker login` so Watchtower can pull the
-      # private image. On a Linux server this file holds the base64 auth token.
-      - ${HOME}/.docker/config.json:/config.json:ro
-    environment:
-      WATCHTOWER_CLEANUP: "true"          # remove old images after updating
-      WATCHTOWER_LABEL_ENABLE: "true"     # only watch labeled containers (above)
-      WATCHTOWER_POLL_INTERVAL: "300"     # check the registry every 5 minutes
-      WATCHTOWER_INCLUDE_RESTARTING: "true"
-
-volumes:
-  intercom-data:
+networks:
+  v2075:
+    name: v2075
+    external: true

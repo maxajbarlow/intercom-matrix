@@ -9,6 +9,12 @@ node_modules/
 # Browser-driven test artifacts (Playwright MCP)
 .playwright-mcp/
 
+# Secrets for the VPS deploy (LOCAL_ADMIN_PASS, IMX_SECRET_KEY) — never commit;
+# lives beside docker-compose.deploy.yml on the server. See .env.example.
+.env
+.env.*
+!.env.example
+
 # Local config — contains controller IPs; copy systems.example.json -> systems.json
 systems.json
 
