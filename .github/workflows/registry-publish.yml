@@ -1,0 +1,56 @@
+name: Build and publish to Riedel registry
+
+# Build the amd64 image and push it to reg.p1.riedel.events whenever code lands
+# on main, or when a vX.Y.Z tag is pushed. Pushing :latest is what triggers
+# Watchtower on the VPS to roll the running container (see docker-compose.deploy.yml).
+#
+# This is the internal auto-deploy pipeline and runs ALONGSIDE the public GHCR
+# workflow (.github/workflows/docker-publish.yml) — both build on the same events.
+# It publishes a new, independent image: reg.p1.riedel.events/intercom-matrix.
+#
+# Requires two repo secrets: REGISTRY_USER and REGISTRY_PASS.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:        # lets you trigger a build by hand from the Actions tab
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest  # Linux runner = 1x minute multiplier (cheapest)
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Derive image tags
+        id: meta
+        run: |
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # buildx gives us the modern BuildKit builder + cross-platform + layer caching
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to reg.p1.riedel.events
+        uses: docker/login-action@v3
+        with:
+          registry: reg.p1.riedel.events
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_PASS }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            reg.p1.riedel.events/intercom-matrix:latest
+            reg.p1.riedel.events/intercom-matrix:v${{ steps.meta.outputs.version }}
+            reg.p1.riedel.events/intercom-matrix:sha-${{ steps.meta.outputs.sha }}
+          # Reuse layers across runs via the GitHub Actions cache — faster builds,
+          # fewer billed minutes. Stored under your 500 MB Actions cache (not the
+          # package quota, which you don't touch since you push to your own registry).
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

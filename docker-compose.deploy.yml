@@ -1,0 +1,55 @@
+# Deployment compose for the VPS — pulls the published image from
+# reg.p1.riedel.events and lets Watchtower auto-update it on every :latest push.
+#
+# Usage on the server (in a directory holding a ./config dir):
+#   docker login reg.p1.riedel.events     # one-time; writes creds Watchtower reads
+#   docker compose -f docker-compose.deploy.yml pull
+#   docker compose -f docker-compose.deploy.yml up -d
+#
+# After this, the "Build and publish to Riedel registry" workflow pushing
+# reg.p1.riedel.events/intercom-matrix:latest is all it takes — Watchtower pulls
+# and recreates the container automatically within WATCHTOWER_POLL_INTERVAL.
+
+services:
+  matrix:
+    image: reg.p1.riedel.events/intercom-matrix:latest
+    ports:
+      - "8080:8080"
+    environment:
+      # Config lives in the mounted ./config dir (writable, so the first-run
+      # wizard and in-app edits persist). systems.json holds controller IPs;
+      # settings.json holds branding/display/safety — both stay off the image.
+      SYSTEMS_FILE: /config/systems.json
+      SETTINGS_FILE: /config/settings.json
+      # Request, auth and vault databases live on the named volume below.
+      REQUESTS_DIR: /data
+      # Live RRCS polling is off by default; flip on once systems.json has hosts.
+      # RRCS_ENABLED: "on"
+    volumes:
+      # Writable config dir — survives recreation and lets the UI persist changes.
+      - ./config:/config
+      # Named volume keeps the request + login databases across container updates.
+      - intercom-data:/data
+    restart: unless-stopped
+    labels:
+      # Opt this container in — Watchtower below runs in label-enable mode,
+      # so only containers carrying this label get auto-updated.
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    volumes:
+      # Talk to the host Docker daemon to recreate containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Registry credentials from `docker login` so Watchtower can pull the
+      # private image. On a Linux server this file holds the base64 auth token.
+      - ${HOME}/.docker/config.json:/config.json:ro
+    environment:
+      WATCHTOWER_CLEANUP: "true"          # remove old images after updating
+      WATCHTOWER_LABEL_ENABLE: "true"     # only watch labeled containers (above)
+      WATCHTOWER_POLL_INTERVAL: "300"     # check the registry every 5 minutes
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+
+volumes:
+  intercom-data:
