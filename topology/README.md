@@ -17,7 +17,8 @@ Indentation is ignored; the hierarchy is driven by markers:
 ```
 
 `Media 1/2`, `2022-7`, `Events` lines are structural and skipped. Every other
-leaf is treated as a port and joined to the live RRCS ports **by name**.
+leaf is treated as a port and joined to the print's panels **by name** (it also
+fills in panel names the print truncated).
 
 ## Wiring a system to a tree
 

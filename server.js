@@ -1,19 +1,18 @@
-// server.js — host the live multi-system intercom-matrix viewer.
+// server.js — host the multi-system intercom-matrix viewer.
 //
-// Serves a single-page app (public/) and a read-only REST API backed by a
-// per-system cached RRCS snapshot. Systems (Studio A, Studio B, Control Room, …) are
-// defined in systems.json; every API call takes a ?system=<id> selector.
+// Serves a single-page app (public/) and a REST API backed by a per-system
+// snapshot built from uploaded config prints. Systems (F1, F2/F3, …) are defined
+// in systems.json; every data call takes a ?system=<id> selector. The viewer
+// never connects to the intercom system itself.
 //
 // Env:
 //   PORT          HTTP port (default 8080)
 //   SYSTEMS_FILE  path to systems.json (default ./systems.json)
-//   REFRESH_SEC   server-side auto-refresh interval per system (0 = off)
-//   RRCS_HOST     fallback single system if no systems.json
 
 const path = require('path');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
-const svc = require('./lib/rrcs-service');
+const svc = require('./lib/system-service');
 const requests = require('./lib/request-service');
 const settings = require('./lib/settings');
 const authDb = require('./lib/auth-db');
@@ -29,7 +28,6 @@ const access = require('./lib/customer-access');
 const { resolveScope, filterPrintDiff } = require('./lib/customer-scope');
 
 const PORT = Number(process.env.PORT) || 8080;
-const REFRESH_SEC = process.env.REFRESH_SEC != null ? Number(process.env.REFRESH_SEC) : 0;
 // Kill-switch for the unauthenticated first-run admin-creation endpoint. On by
 // default; set ONBOARDING_OPEN=0 to force the env bootstrap admin (LOCAL_ADMIN_*)
 // as the only way to mint the first admin (e.g. on an untrusted network).
@@ -95,15 +93,9 @@ const gate = (action) => (req, res, next) =>
 app.get('/api/systems', (req, res) => {
   const systems = access.visibleSystems(currentUser(req));
   const def = systems.some((x) => x.id === svc.defaultSystem()) ? svc.defaultSystem() : (systems[0] ? systems[0].id : null);
-  res.json({ default: def, systems, autoRefreshSec: REFRESH_SEC, rrcsEnabled: svc.rrcsEnabled() });
+  res.json({ default: def, systems });
 });
 
-// Point a system at a controller (persisted to systems.json). Admin-only: it
-// repoints the data source EVERY viewer and customer group sees.
-app.post('/api/system-config', gate('system:update'), (req, res) => {
-  try { res.json(svc.setSystemHost(req.body?.system, req.body?.host, req.body?.port)); }
-  catch (e) { res.status(400).json({ error: e.message }); }
-});
 
 // Systems CRUD — engineer-gated (viewers get read-only via GET /api/systems).
 app.post('/api/systems', gate('system:create'), (req, res) => {
@@ -290,7 +282,7 @@ app.post('/api/auth-config/ldap/test', gate('authconfig:write'), async (req, res
 app.get('/api/status', (req, res) => {
   const s = scoped(req);
   if (!s) return res.status(404).json({ error: 'unknown system' });
-  res.json({ ok: s.ok, error: s.error, stale: s.stale, lastError: s.lastError, lastErrorAt: s.lastErrorAt, system: s.system, host: s.host, port: s.port, fetchedAt: s.fetchedAt, counts: s.counts, config: s.config, autoRefreshSec: REFRESH_SEC });
+  res.json({ ok: s.ok, error: s.error, source: s.source, system: s.system, fetchedAt: s.fetchedAt, counts: s.counts });
 });
 app.get('/api/snapshot', (req, res) => { const s = scoped(req); s ? res.json(s) : res.status(404).json({ error: 'unknown system' }); });
 app.get('/api/matrix', (req, res) => { const s = scoped(req); s ? res.json({ ok: s.ok, system: s.system, fetchedAt: s.fetchedAt, matrix: s.matrix }) : res.status(404).json({ error: 'unknown system' }); });
@@ -312,25 +304,7 @@ app.get('/api/export.xlsx', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'export failed: ' + e.message }); }
 });
 
-// Trigger a read-only re-pull for one system.
-app.post('/api/refresh', async (req, res) => {
-  try {
-    await svc.refresh(sysId(req), { force: true });
-    const s = scoped(req);
-    res.json({ ok: s.ok, error: s.error, stale: s.stale, lastError: s.lastError, system: s.system, host: s.host, fetchedAt: s.fetchedAt, counts: s.counts });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
 
-// --- controller config (.Art/.ash) for key-access, per system ------------------
-app.get('/api/config-file', (req, res) => res.json(svc.configInfoFor(sysId(req))));
-app.post('/api/config-file', gate('source:write'), express.raw({ type: () => true, limit: '20mb' }), (req, res) => {
-  try {
-    if (!req.body || !req.body.length) return res.status(400).json({ error: 'empty body' });
-    const name = (req.query.name || 'uploaded config').toString();
-    res.json(svc.loadConfigBuffer(sysId(req), req.body, name));
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-app.delete('/api/config-file', gate('source:write'), (req, res) => { try { res.json(svc.clearConfig(sysId(req))); } catch (e) { res.status(400).json({ error: e.message }); } });
 
 // --- Node topology (Net→Node→Card→Port tree) for grouping/filtering ---------
 app.get('/api/topology-file', (req, res) => res.json(svc.topologyInfoFor(sysId(req))));
@@ -419,24 +393,15 @@ app.post('/api/requests-backup', (req, res) => { try { res.json(requests.backup(
 app.use(express.static(path.join(__dirname, 'public')));
 
 const server = app.listen(PORT, () => {
-  const defs = svc.init();
+  svc.init();
   // Suppress the first-run wizard for deployments that were configured before it
   // existed (admin present, a system fed, or the login wall on). A truly fresh
   // install matches none of these and gets the wizard on first browser load.
   if (!settings.isOnboarded() && deploymentLooksConfigured()) settings.markOnboarded();
   console.log(`Intercom Matrix → http://localhost:${PORT}`);
-  console.log(`  Systems: ${defs.map((d) => `${d.name}${d.host ? ' (' + d.host + ')' : ' (unconfigured)'}`).join(', ') || '(none — set systems.json or RRCS_HOST)'}`);
+  const listed = svc.listSystems();
+  console.log(`  Systems: ${listed.map((s) => `${s.name}${s.configured ? '' : ' (no print yet)'}`).join(', ') || '(none — add one in Settings → Systems)'}`);
   if (onboardingState().active) console.log('  Setup: first-run wizard will launch on first browser visit');
-  console.log(`  Auto-refresh: ${REFRESH_SEC > 0 ? REFRESH_SEC + 's' : 'off'}`);
-  if (!svc.rrcsEnabled()) {
-    console.log('  RRCS: DISABLED (print/offline only) — set RRCS_ENABLED=1 to turn live RRCS back on');
-    return;
-  }
-  for (const d of defs) {
-    if (!d.host) continue;
-    svc.refresh(d.id, { force: true }).then((s) => console.log(`  [${d.id}] ${s.ok ? 'ok — ' + JSON.stringify(s.counts) : 'failed — ' + s.error}`)).catch(() => {});
-    if (REFRESH_SEC > 0) setInterval(() => svc.refresh(d.id, { force: true }).catch(() => {}), REFRESH_SEC * 1000);
-  }
 });
 
 // Friendly startup failures — the common one on a shared box is the port already

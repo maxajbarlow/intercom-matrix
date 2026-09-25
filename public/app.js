@@ -1,13 +1,11 @@
 'use strict';
-// Live intercom-matrix viewer. Pulls a shared, cached RRCS snapshot from the
-// server and renders three views: Matrix (panel × conference), Conferences
+// Intercom-matrix viewer. Pulls a system's snapshot (built server-side from the
+// latest uploaded config print) and renders three views: Matrix (panel × conference), Conferences
 // (members of a conference), Panels (every conference a panel belongs to).
 
 const els = {
   tabs: document.getElementById('tabs'),
   system: document.getElementById('systemSelect'),
-  auto: document.getElementById('autoSelect'),
-  refresh: document.getElementById('refreshBtn'),
   statusText: document.getElementById('statusText'),
   countText: document.getElementById('countText'),
   updatedText: document.getElementById('updatedText'),
@@ -16,12 +14,10 @@ const els = {
   mxRowSearch: document.getElementById('mxRowSearch'),
   mxColSearch: document.getElementById('mxColSearch'),
   mxPanelsOnly: document.getElementById('mxPanelsOnly'),
-  mxKeyAccess: document.getElementById('mxKeyAccess'),
   mxGrid: document.getElementById('mxGrid'),
   mxHint: document.getElementById('mxHint'),
   mxNode: document.getElementById('mxNode'),
   mxCard: document.getElementById('mxCard'),
-  cfgFile: document.getElementById('cfgFile'),
   topoFile: document.getElementById('topoFile'),
   printFile: document.getElementById('printFile'),
   // conferences
@@ -47,10 +43,8 @@ const state = {
   systems: [],           // /api/systems list
   system: null,          // active system id
   view: 'matrix',
-  autoTimer: null,
   selConf: null,         // index into conferences+groups
   selPanel: null,        // panel addr
-  rrcsEnabled: true,     // /api/systems → false disables live RRCS controls
   cmp: { from: null, to: null },  // print version diff selection (version ids)
   // --- change-request platform ---
   requests: [], reqStats: { byStatus: {}, total: 0 },
@@ -105,26 +99,13 @@ function url(p) { return rel(p) + (p.includes('?') ? '&' : '?') + 'system=' + en
 // ---------- status ----------
 function setStatus(s) {
   const ok = s && s.ok;
-  const when = (t) => (t ? new Date(t).toLocaleTimeString() : '');
-  if (ok && s.source === 'vsp') {
-    els.statusText.innerHTML = `<span class="dotind" style="background:var(--both)"></span>Offline source: <b>Virtual system export</b>`;
-  } else if (ok && s.source === 'print') {
-    els.statusText.innerHTML = '';
-  } else if (!state.rrcsEnabled && !ok) {
-    els.statusText.innerHTML = `<span class="dotind" style="background:var(--text-dim)"></span>RRCS disabled — <b>load a config print</b> for this system (Settings → Sources)`;
-  } else if (!state.rrcsEnabled) {
-    els.statusText.innerHTML = `<span class="dotind" style="background:var(--both)"></span>Offline source: <b>config print</b>`;
-  } else if (ok && s.stale) {
-    els.statusText.innerHTML = `<span class="dotind" style="background:var(--listen)"></span>Showing cached data — last refresh failed${s.lastError ? ' (' + esc(s.lastError) + ')' : ''}`;
-  } else if (ok) {
-    els.statusText.innerHTML = `<span class="dotind" style="background:var(--ok)"></span>Connected to <b>${esc(s.host)}:${s.port}</b>`;
-  } else {
-    els.statusText.innerHTML = `<span class="dotind" style="background:var(--bad)"></span>${esc((s && (s.lastError || s.error)) || 'no data')}`;
-  }
+  const when = (t) => (t ? new Date(t).toLocaleString() : '');
+  // A loaded print needs no status line; otherwise say why there's no matrix.
+  els.statusText.innerHTML = ok ? ''
+    : `<span class="dotind" style="background:var(--text-dim)"></span>${esc((s && s.error) || 'no data')}`;
   if (ok && s.counts) {
-    const k = s.counts.keyEdges ? ` · +${s.counts.keyEdges} via key` : '';
-    els.countText.textContent = `${s.counts.panels} panels · ${s.counts.conferences} conferences · ${s.counts.memberEdges} memberships${k}`;
-    els.updatedText.innerHTML = (s.stale ? `<span style="color:var(--listen)">cached from ${when(s.fetchedAt)}` + (s.lastErrorAt ? ` · retry failed ${when(s.lastErrorAt)}` : '') + '</span>' : 'updated ' + when(s.fetchedAt));
+    els.countText.textContent = `${s.counts.panels} panels · ${s.counts.conferences} conferences · ${s.counts.memberEdges} memberships`;
+    els.updatedText.textContent = 'print from ' + when(s.fetchedAt);
   } else { els.countText.textContent = ''; els.updatedText.textContent = ''; }
   populateTopoFilters();
 }
@@ -141,15 +122,6 @@ async function afterSourceChange() {
   if (state.sysSel === state.system) await loadSnapshot();
   renderSettings();
 }
-
-async function uploadConfig(file) {
-  try {
-    const r = await fetch(sysUrl('/api/config-file?name=' + encodeURIComponent(file.name)), { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: await file.arrayBuffer() });
-    const info = await r.json(); if (!r.ok) throw new Error(info.error || 'upload failed');
-    await afterSourceChange(); setMsg('Key-access config loaded.', true);
-  } catch (e) { setMsg('Config upload failed: ' + e.message, false); }
-}
-async function clearConfig() { try { await fetch(sysUrl('/api/config-file'), { method: 'DELETE' }); await afterSourceChange(); } catch (e) { setMsg(e.message, false); } }
 
 async function uploadTopology(file) {
   try {
@@ -306,18 +278,19 @@ async function loadSnapshot() {
   await Promise.all([loadRequests().catch(() => {}), loadPending().catch(() => {})]);
   render();
 }
-async function refreshNow() {
-  els.refresh.disabled = true;
-  els.refresh.textContent = 'Refreshing…';
+// Pick up a print someone else just uploaded without a manual reload: when the
+// tab regains focus (and on a slow tick while it's visible), ask the cheap
+// /api/status for the active print's timestamp and reload only if it changed.
+const SNAPSHOT_RECHECK_MS = 60000;
+async function recheckSnapshot() {
+  if (document.hidden || !state.system || !state.data) return;
   try {
-    await api('/api/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ system: state.system }) });
-    await loadSnapshot();
-  } catch (e) {
-    els.statusText.innerHTML = `<span class="dotind" style="background:var(--bad)"></span>Refresh failed: ${esc(e.message)}`;
-  } finally {
-    els.refresh.disabled = false;
-    els.refresh.textContent = 'Refresh';
-  }
+    const s = await api(url('/api/status'));
+    if (s.fetchedAt === state.data.fetchedAt && s.ok === state.data.ok) return;
+    await Promise.all([loadSnapshot(), reloadSystems()]);   // matrix + per-system versions/counts
+    const editing = document.querySelector('#setSaveState.dirty');   // never clobber unsaved edits
+    if (state.view === 'settings' && !editing) renderSettings();
+  } catch { /* keep showing the current view; the next check retries */ }
 }
 // Download the current system as a 3-sheet .xlsx (Matrix / Conferences / Panels).
 // Export the active system to a .xlsx. Triggered from Settings → Systems; `btn`
@@ -350,12 +323,7 @@ async function switchSystem(id) {
   state.cmp = { from: null, to: null };
   els.statusText.innerHTML = `<span class="dotind" style="background:var(--text-dim)"></span>Loading ${esc(id)}…`;
   els.mxGrid.replaceChildren(); els.confDetail.innerHTML = ''; els.panelDetail.innerHTML = '';
-  try { await loadSnapshot(); if (state.rrcsEnabled && (!state.data || !state.data.ok)) await refreshNow(); } catch { /* status shows error */ }
-}
-function setAuto(sec) {
-  if (state.autoTimer) { clearInterval(state.autoTimer); state.autoTimer = null; }
-  sec = Number(sec);
-  if (sec > 0) state.autoTimer = setInterval(refreshNow, sec * 1000);
+  try { await loadSnapshot(); } catch { /* status shows error */ }
 }
 
 // ---------- view switching ----------
@@ -433,14 +401,11 @@ function renderMatrix() {
     h.innerHTML = `<span class="nm">${esc(rk.r.name)}</span>${rk.r.isPanel ? '' : '<span class="pin">port</span>'}`;
     frag.appendChild(h);
   });
-  const showKey = els.mxKeyAccess.checked;
   for (const cell of m.cells) {
-    if (cell.k && !showKey) continue;
     const rp = rowPos.get(cell.r), cp = colPos.get(cell.c);
     if (rp == null || cp == null) continue;
     const d = document.createElement('div');
-    if (cell.k) { d.className = 'cell key'; d.textContent = '·'; d.title = 'reachable via a panel key'; }
-    else { d.className = 'cell ' + cls(cell.t, cell.l); d.textContent = sym(cell.t, cell.l); }
+    d.className = 'cell ' + cls(cell.t, cell.l); d.textContent = sym(cell.t, cell.l);
     d.style.gridArea = `${rp + 2} / ${cp + 2}`;
     frag.appendChild(d);
   }
@@ -556,23 +521,19 @@ function renderPanels() {
   if (sel) renderPanelDetail(sel);
 }
 function renderPanelDetail(p) {
-  const members = p.memberships.filter((m) => m.access === 'member');
-  const keys = p.memberships.filter((m) => m.access === 'key');
+  const members = p.memberships;
   const destIdx = destIndexByKindName();
   const rows = p.memberships.map((m) => {
     const di = destIdx.get(m.kind + '\u0000' + m.name);
     const nameCell = di != null ? `<a href="#" class="xlink" data-conf="${di}" title="Open this ${m.kind}">${esc(m.name)}</a>` : esc(m.name);
     return `
-    <tr><td>${nameCell}</td><td class="type-chip">${m.kind}</td>
-    <td>${m.access === 'key' ? '<span class="pill key">Via key</span>' : '<span class="pill muted-2">Member</span>'}</td>
-    <td>${m.access === 'key' ? '<span class="type-chip">—</span>' : dirPill(m.talk, m.listen)}</td></tr>`;
+    <tr><td>${nameCell}</td><td class="type-chip">${m.kind}</td><td>${dirPill(m.talk, m.listen)}</td></tr>`;
   }).join('');
-  const keyNote = keys.length ? ` · <span class="key-note">+${keys.length} via key</span>` : '';
   els.panelDetail.innerHTML = `
     <div class="detail-head"><h2>${esc(p.name)}</h2><button class="btn small" data-reqpanel="${esc(p.name)}">⇄ Request change</button></div>
-    <div class="meta"><span class="tag">${p.isPanel ? 'panel' : 'port'}</span>${p.type ? '<span class="tag">' + esc(p.type) + '</span>' : ''}${p.twoWire ? '<span class="tag">2-wire (in+out)</span>' : ''}<span class="tag">${esc(p.addr)}</span>${p.node ? '<span class="tag">' + esc(p.node) + ' · ' + esc(p.bay || '') + '</span>' : ''}${members.length} member${keyNote}</div>
-    <table class="members"><thead><tr><th>Conference / Group</th><th>Kind</th><th>Access</th><th>Direction</th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="4">Not a member of any conference.</td></tr>'}</tbody></table>
+    <div class="meta"><span class="tag">${p.isPanel ? 'panel' : 'port'}</span>${p.type ? '<span class="tag">' + esc(p.type) + '</span>' : ''}${p.twoWire ? '<span class="tag">2-wire (in+out)</span>' : ''}<span class="tag">${esc(p.addr)}</span>${p.node ? '<span class="tag">' + esc(p.node) + ' · ' + esc(p.bay || '') + '</span>' : ''}${members.length} conference${members.length === 1 ? '' : 's'}</div>
+    <table class="members"><thead><tr><th>Conference / Group</th><th>Kind</th><th>Direction</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="3">Not on any conference.</td></tr>'}</tbody></table>
     ${pendingPanelHtml('panel', p.name)}`;
 }
 
@@ -1191,8 +1152,9 @@ function pendingPanelHtml(kind, name) {
 
 // ---------- wire up ----------
 els.tabs.addEventListener('click', (e) => { const t = e.target.closest('.tab'); if (t) showView(t.dataset.view); });
-els.refresh.addEventListener('click', refreshNow);
-els.auto.addEventListener('change', () => setAuto(els.auto.value));
+window.addEventListener('focus', recheckSnapshot);
+document.addEventListener('visibilitychange', recheckSnapshot);
+setInterval(recheckSnapshot, SNAPSHOT_RECHECK_MS);
 els.system.addEventListener('change', () => switchSystem(els.system.value));
 // profile menu (top-right): toggle + item actions; close on outside click / Esc
 document.getElementById('profileBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleProfileMenu(); });
@@ -1210,7 +1172,6 @@ let t1; const deb = (fn) => { clearTimeout(t1); t1 = setTimeout(fn, 150); };
 els.mxRowSearch.addEventListener('input', () => deb(renderMatrix));
 els.mxColSearch.addEventListener('input', () => deb(renderMatrix));
 els.mxPanelsOnly.addEventListener('change', renderMatrix);
-els.mxKeyAccess.addEventListener('change', renderMatrix);
 els.confSearch.addEventListener('input', () => deb(renderConferences));
 els.confSort.addEventListener('change', renderConferences);
 els.panelSearch.addEventListener('input', () => deb(renderPanels));
@@ -1221,7 +1182,6 @@ els.panelDetail.addEventListener('click', (e) => { const a = e.target.closest('a
 // Sources: persistent hidden file inputs (the upload buttons live in the
 // dynamically-rendered Sources section, wired via data-act; drag-drop is
 // re-bound per render by wireSourceDrop()).
-els.cfgFile.addEventListener('change', () => { const f = els.cfgFile.files[0]; if (f) uploadConfig(f); els.cfgFile.value = ''; });
 els.topoFile.addEventListener('change', () => { const f = els.topoFile.files[0]; if (f) uploadTopology(f); els.topoFile.value = ''; });
 els.printFile.addEventListener('change', () => { const f = els.printFile.files[0]; if (f) uploadPrint(f); els.printFile.value = ''; });
 els.mxNode.addEventListener('change', () => { fillCards(els.mxNode, els.mxCard, ''); renderMatrix(); });
@@ -1318,7 +1278,6 @@ renderWho();
 // ============================================================================
 // SETTINGS — shared deployment configuration (engineer-gated writes)
 // ============================================================================
-const SET_AUTO_CHOICES = [[0, 'Off'], [10, '10s'], [30, '30s'], [60, '1m'], [300, '5m']];
 const SET_THEMES = [['dark', 'Dark'], ['light', 'Light']];
 const SET_VIEWS = [['matrix', 'Matrix'], ['conferences', 'Conferences'], ['panels', 'Panels'], ['requests', 'Requests'], ['workorder', 'Work order']];
 const SET_DATEFMT = [['short', 'Short (6/12/26)'], ['medium', 'Medium (12 Jun 2026)'], ['long', 'Long (June 12, 2026)']];
@@ -1364,10 +1323,10 @@ async function saveSettingsPatch(patch, okMsg) {
 const setOpt = (pairs, cur) => pairs.map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(cur) ? ' selected' : ''}>${esc(l)}</option>`).join('');
 
 const SET_SECTIONS = [
-  { key: 'systems', icon: '⛓', label: 'Systems', sub: 'Connections & sources' },
+  { key: 'systems', icon: '⛓', label: 'Systems', sub: 'Prints & topology' },
   { key: 'branding', icon: '✦', label: 'Branding', sub: 'Identity & logo' },
   { key: 'display', icon: '◐', label: 'Display', sub: 'Defaults & theme' },
-  { key: 'safety', icon: '⌁', label: 'Safety', sub: 'RRCS · login' },
+  { key: 'safety', icon: '⌁', label: 'Access', sub: 'Login wall · setup' },
   { key: 'users', icon: '⚇', label: 'Users', sub: 'Accounts & SSO' },
   { key: 'customers', icon: '◎', label: 'Customers', sub: 'Scoped channel views' },
 ];
@@ -1453,15 +1412,15 @@ function renderSettings() {
 // section scaffold: header (title + lead) over a body
 const secHead = (title, lead) => `<header class="sec-head"><h3>${title}</h3><p>${lead}</p></header>`;
 
-const sysStatusCls = (sy) => sy.ok ? (sy.stale ? 'warn' : 'ok') : 'off';
+const sysStatusCls = (sy) => (sy.ok ? 'ok' : 'off');
 const srcBadge = (loaded) => loaded ? '<span class="pill both tiny">loaded</span>' : '<span class="pill muted tiny">none</span>';
 
 // Systems — two-pane master/detail. The list (left) selects a system; the detail
-// (right) manages that one system's live connection (RRCS) + offline sources,
+// (right) manages that one system's config prints + topology,
 // independent of the header's active system. All per-system status comes from
 // /api/systems (state.systems), so no extra fetch is needed to browse.
 function secSystems(s, eng, dis, sysList) {
-  const lead = 'Each intercom system the viewer switches between — its live <b>RRCS controller</b> and its <b>offline sources</b>. Pick one to manage it.';
+  const lead = 'Each intercom system the viewer switches between, fed by uploaded <b>config prints</b>. Pick one to manage it.';
   if (!sysList.length && state.sysSel !== '__new__') {
     return `${secHead('Systems', lead)}<div class="sec-empty">No systems defined yet.</div>${eng ? '<button class="btn small" data-act="sys-add-open">+ Add system</button>' : ''}`;
   }
@@ -1473,7 +1432,7 @@ function secSystems(s, eng, dis, sysList) {
     <button class="sysrow${sy.id === state.sysSel ? ' active' : ''}" data-act="sys-select" data-sys="${esc(sy.id)}">
       <span class="sys-dot ${sysStatusCls(sy)}"></span>
       <span class="sysrow-tx"><b>${esc(sy.name)}</b><span>${esc(sy.id)}</span></span>
-      <span class="sys-src src-${esc(sy.source || 'offline')}">${esc(sy.source || 'offline')}</span>
+      <span class="sys-src src-${esc(sy.source || 'none')}">${sy.source === 'print' ? 'print' : 'no print'}</span>
     </button>`).join('');
 
   const sel = sysList.find((x) => x.id === state.sysSel);
@@ -1496,23 +1455,22 @@ function secSysAddForm() {
     <div class="sysd-body">
       <label class="fl"><span>System id <span class="muted">(permanent — keys stored prints &amp; requests)</span></span><input id="ssNewId" placeholder="studio-d" spellcheck="false" /></label>
       <label class="fl"><span>Display name</span><input id="ssNewName" placeholder="Studio C" /></label>
-      <label class="fl"><span>Controller IP <span class="muted">(optional — add an offline source later)</span></span><input id="ssNewHost" placeholder="10.x.x.x" spellcheck="false" /></label>
     </div>
     <div class="set-savebar"><button class="btn ghost" data-act="sys-add-cancel">Cancel</button><span class="grow"></span><button class="btn primary" data-act="sys-add">Create system</button></div>`;
 }
 
-// Detail for one system: identity + connection (RRCS) + offline sources.
+// Detail for one system: identity + its sources (config prints, topology).
 function secSysDetail(sys, eng) {
   const ed = isEditor();
   const dis = eng ? '' : ' disabled';
-  const statusTxt = sys.ok ? (sys.stale ? 'stale — showing cached data' : 'live') : (sys.error || 'no data yet');
-  const counts = (sys.ok && sys.counts) ? ` · ${sys.counts.panels} panels · ${sys.counts.conferences} conferences` : '';
+  const statusTxt = sys.ok ? `${sys.counts.panels} panels · ${sys.counts.conferences} conferences` : (sys.error || 'no data yet');
 
   const head = `
     <div class="sysd-head">
       <span class="sys-dot ${sysStatusCls(sys)}"></span>
       <input class="ss-name sysd-name" value="${esc(sys.name)}" aria-label="System name"${dis} />
       <span class="sys-id">${esc(sys.id)}</span>
+      ${eng ? '<button class="btn small primary" data-act="sys-save">Save</button>' : ''}
       <span class="grow"></span>
       <button class="iconbtn" data-act="export-xlsx" title="Export this system to Excel">⬇</button>
       ${eng ? `<button class="iconbtn" data-act="sys-up" title="Move up">↑</button>
@@ -1520,22 +1478,9 @@ function secSysDetail(sys, eng) {
         <button class="btn small danger" data-act="sys-del">Delete</button>` : ''}
     </div>`;
 
-  const conn = `
-    <section class="sysd-sec">
-      <div class="sysd-sec-h"><h4>Connection · RRCS</h4><span class="sys-src src-${esc(sys.source)}">${esc(sys.source)}</span></div>
-      <p class="sysd-note">The live source — the viewer polls this controller (read-only <code>Get*</code> only).</p>
-      <div class="sysd-conn">
-        <label class="fl"><span>Controller IP</span><input class="ss-host" value="${esc(sys.host || '')}" placeholder="(none — offline only)" spellcheck="false"${dis} /></label>
-        <label class="fl"><span>Port</span><input class="ss-port" type="number" value="${esc(sys.port || 8193)}"${dis} /></label>
-      </div>
-      <div class="sysd-status"><span class="sys-dot ${sysStatusCls(sys)}"></span>${esc(statusTxt)}${counts}</div>
-      ${eng ? '<div class="sysd-bar"><button class="btn small primary" data-act="sys-save">Save connection</button></div>' : ''}
-    </section>`;
 
   const print = sys.print || { loaded: false, history: [] };
-  const cfg = sys.config || { loaded: false };
   const topo = sys.topology || { loaded: false };
-  const vsp = sys.vsp || { loaded: false };
   const dz = ed ? `<div class="dropzone" id="srcDrop">
         <div class="dz-icon">⤓</div><p>Drop a print <b>PDF</b> / <b>.txt</b>, or</p>
         <button class="btn primary small" data-act="src-print-pick">Choose file…</button>
@@ -1544,7 +1489,7 @@ function secSysDetail(sys, eng) {
   const printItem = `
     <div class="srcitem">
       <div class="srcitem-h"><span class="srcitem-t">config print</span>${srcBadge(print.loaded)}<span class="grow"></span>${ed && print.loaded ? '<button class="btn small ghost" data-act="src-print-clear">Clear</button>' : ''}</div>
-      <div class="srcitem-meta${print.loaded ? '' : ' muted'}">${print.loaded ? `<b>${esc(print.name)}</b> · v${print.versionId} · ${print.conferences} conf · ${print.keyAssignments} keys${print.truncated ? ` · <span class="bad">${print.truncated} truncated (print A3)</span>` : ''}` : 'Offline matrix source from a “Group &amp; Conference List” print.'}</div>
+      <div class="srcitem-meta${print.loaded ? '' : ' muted'}">${print.loaded ? `<b>${esc(print.name)}</b> · v${print.versionId} · ${print.conferences} conf · ${print.keyAssignments} keys${print.truncated ? ` · <span class="bad">${print.truncated} truncated (print A3)</span>` : ''}` : 'The matrix source: a “Group &amp; Conference List” print from the config tool.'}</div>
       ${dz}
       <div id="srcPrintVersions"></div>
       <div id="srcPrintDiff" class="diff"></div>
@@ -1554,35 +1499,25 @@ function secSysDetail(sys, eng) {
       <div class="srcitem-h"><span class="srcitem-t">${title} <span class="muted">${sub}</span></span>${srcBadge(info.loaded)}<span class="grow"></span>${ed ? `<button class="btn small" data-act="${pickAct}">${info.loaded ? 'Replace' : 'Upload'}</button>${info.loaded ? `<button class="btn small ghost" data-act="${clearAct}">Clear</button>` : ''}` : ''}</div>
       <div class="srcitem-meta${info.loaded ? '' : ' muted'}">${info.loaded ? meta : sub}</div>
     </div>`;
-  const cfgItem = fileItem('Key-access', '.Art / .ash', cfg, cfg.loaded ? `${esc(cfg.name)} · ${cfg.keys || 0} keys` : 'Adds programmed-key reachability on top of RRCS membership.', 'src-cfg-pick', 'src-cfg-clear');
   const topoItem = fileItem('Topology', 'node / card tree', topo, topo.loaded ? `${esc(topo.name || '—')} · ${topo.nodes || 0} nodes · ${topo.cards || 0} cards` : 'Groups &amp; filters panels by node and card.', 'src-topo-pick', 'src-topo-clear');
-  const vspItem = `
-    <div class="srcitem">
-      <div class="srcitem-h"><span class="srcitem-t">Virtual system export</span>${srcBadge(vsp.loaded)}</div>
-      <div class="srcitem-meta${vsp.loaded ? '' : ' muted'}">${vsp.loaded ? esc(vsp.name) : 'A VSP export JSON (configured by a file path below).'}</div>
-    </div>`;
 
   const adv = eng ? `
     <details class="sysd-adv">
       <summary>Advanced — server file paths <span class="muted">(for pre-baked deployments)</span></summary>
       <div class="sysd-adv-b">
-        <label class="fl"><span>Key-access path</span><input class="ss-config" value="${esc(sys.configPath || '')}" placeholder=".Art / .ash path on the server" /></label>
         <label class="fl"><span>Topology path</span><input class="ss-topology" value="${esc(sys.topologyPath || '')}" placeholder="node-tree .txt path" /></label>
-        <label class="fl"><span>VSP export path</span><input class="ss-vsp" value="${esc(sys.vspPath || '')}" placeholder="vsp-export.json path" /></label>
       </div>
       <div class="sysd-bar"><button class="btn small primary" data-act="sys-save">Save paths</button></div>
     </details>` : '';
 
   return `${head}
     <div class="sysd-body">
-      ${conn}
       <section class="sysd-sec">
-        <div class="sysd-sec-h"><h4>Offline sources</h4></div>
-        <p class="sysd-note">Used when there's no live controller, or to layer key-access on top of RRCS. ${ed ? '' : 'Sign in as an <b>editor</b> to upload.'}</p>
+        <div class="sysd-sec-h"><h4>Sources</h4></div>
+        <div class="sysd-status"><span class="sys-dot ${sysStatusCls(sys)}"></span>${esc(statusTxt)}</div>
+        <p class="sysd-note">Upload a new print whenever the config changes — it becomes the live matrix and verifies open change requests. ${ed ? '' : 'Sign in as an <b>editor</b> to upload.'}</p>
         ${printItem}
-        ${cfgItem}
         ${topoItem}
-        ${vspItem}
       </section>
       ${adv}
     </div>`;
@@ -1617,32 +1552,25 @@ function secDisplay(s, eng, dis) {
     `<button class="seg-btn${v === cur ? ' active' : ''}" data-theme-pick="${v}"${dis}>${l}</button>`).join('');
   return `${secHead('Display defaults', 'Applied to every client on first load. Each viewer can still override in-session from the header.')}
     <div class="sec-body">
-      <div class="fl2">
-        <label class="fl"><span>Default auto-refresh</span><select id="stAuto"${dis}>${setOpt(SET_AUTO_CHOICES, s.display.autoRefreshSec)}</select></label>
-        <label class="fl"><span>Date format</span><select id="stDateFmt"${dis}>${setOpt(SET_DATEFMT, s.display.dateFormat)}</select></label>
-      </div>
+      <label class="fl fl-narrow"><span>Date format</span><select id="stDateFmt"${dis}>${setOpt(SET_DATEFMT, s.display.dateFormat)}</select></label>
       <div class="fl"><span>Theme</span><div class="seg" id="stThemeSeg" data-theme="${esc(s.display.theme)}">${seg(s.display.theme)}</div></div>
       <div class="tgl-group">
         ${tgl('stPanelsOnly', s.display.matrixPanelsOnly, 'Matrix opens to panels only', 'Hide non-panel ports by default', dis)}
-        ${tgl('stKeyAccess', s.display.matrixKeyAccess, 'Matrix shows key-access', 'Overlay programmed-key reachability', dis)}
       </div>
     </div>
     ${eng ? saveBar('save-display', 'Save display defaults') : ''}`;
 }
 
 function secSafety(s, eng, dis) {
-  return `${secHead('Safety', 'Live-polling and access controls, shared across all clients.')}
+  return `${secHead('Access', 'Who can see this deployment, shared across all clients.')}
     <div class="sec-body">
       <div class="tgl-group">
-        ${tgl('stRrcs', s.safety.rrcsEnabled, 'RRCS live polling', 'Off = print / offline only — no network calls', dis)}
         ${tgl('stRequireLogin', s.safety.requireLogin, 'Require login', 'When on, nobody sees data without signing in. Off = anonymous read-only.', dis)}
       </div>
       ${!s.safety.requireLogin && state.auth && state.auth.requireLogin ? '<p class="sec-note">🔒 Login is currently <b>enforced anyway</b> because customer groups exist — an anonymous viewer can’t be scoped to a customer.</p>' : ''}
-      <label class="fl fl-narrow"><span>Minimum refresh interval (seconds)</span><input id="stMinRefresh" type="number" min="3" max="3600" value="${esc(s.safety.minRefreshSec)}"${dis} /></label>
-      <p class="sec-note">⚠ Lowering the interval increases controller load. RRCS is hard-locked to read-only <code>Get*</code> calls regardless of this toggle.</p>
       ${eng ? `<div class="sec-subaction"><button class="btn" data-act="rerun-setup">↻ Re-run setup wizard</button><span class="sec-note" style="margin:0">Replay the guided first-run walkthrough (won’t delete anything).</span></div>` : ''}
     </div>
-    ${eng ? saveBar('save-safety', 'Save safety') : ''}`;
+    ${eng ? saveBar('save-safety', 'Save access') : ''}`;
 }
 
 // ---- in-app LDAP/SAML connection config (admin) ----------------------------
@@ -1806,10 +1734,8 @@ function secUsers(s, eng, dis) {
 function sysDetailValues() {
   const W = els.settingsWrap;
   const g = (sel) => { const n = W.querySelector(sel); return n ? n.value.trim() : undefined; };
-  const v = { name: g('.ss-name'), host: g('.ss-host'), port: Number(g('.ss-port')) || undefined };
-  const cfg = g('.ss-config'); if (cfg !== undefined) v.config = cfg;
+  const v = { name: g('.ss-name') };
   const topo = g('.ss-topology'); if (topo !== undefined) v.topology = topo;
-  const vsp = g('.ss-vsp'); if (vsp !== undefined) v.vsp = vsp;
   return v;
 }
 
@@ -1821,10 +1747,8 @@ async function settingsAction(act, ctx) {
     if (act === 'rerun-setup') { if (window.Onboarding) window.Onboarding.startManual(); return; }
     if (act === 'export-xlsx') { exportXlsx(ctx); return; }
     if (act === 'src-print-pick') { els.printFile.click(); return; }
-    if (act === 'src-cfg-pick') { els.cfgFile.click(); return; }
     if (act === 'src-topo-pick') { els.topoFile.click(); return; }
     if (act === 'src-print-clear') { if (confirm('Clear the config print source for this system?')) await clearPrintFile(); return; }
-    if (act === 'src-cfg-clear') { await clearConfig(); return; }
     if (act === 'src-topo-clear') { await clearTopologyFile(); return; }
     if (act === 'logo-pick') { els.logoFile.click(); return; }
     if (act === 'logo-clear') { logoDraft = ''; renderSettings(); return; }
@@ -1840,26 +1764,17 @@ async function settingsAction(act, ctx) {
     }
     if (act === 'save-display') {
       const d = {
-        autoRefreshSec: Number(W.querySelector('#stAuto').value),
         theme: (W.querySelector('#stThemeSeg') || {}).dataset?.theme || 'dark',
         dateFormat: W.querySelector('#stDateFmt').value,
-        matrixPanelsOnly: W.querySelector('#stPanelsOnly').checked, matrixKeyAccess: W.querySelector('#stKeyAccess').checked,
+        matrixPanelsOnly: W.querySelector('#stPanelsOnly').checked,
       };
       await saveSettingsPatch({ display: d }, 'Display defaults saved.');
-      // reflect new defaults in the live header/matrix controls for the saver
-      els.auto.value = String(d.autoRefreshSec); setAuto(d.autoRefreshSec);
-      els.mxPanelsOnly.checked = d.matrixPanelsOnly; els.mxKeyAccess.checked = d.matrixKeyAccess;
+      els.mxPanelsOnly.checked = d.matrixPanelsOnly;   // reflect the new default for the saver
       return;
     }
     if (act === 'save-safety') {
-      const wasOn = state.rrcsEnabled;
-      await saveSettingsPatch({ safety: {
-        rrcsEnabled: W.querySelector('#stRrcs').checked,
-        minRefreshSec: Number(W.querySelector('#stMinRefresh').value),
-        requireLogin: W.querySelector('#stRequireLogin').checked,
-      } }, 'Safety saved.');
-      await reloadSystems();
-      if (!wasOn && state.rrcsEnabled) await refreshNow();   // just turned RRCS on
+      await saveSettingsPatch({ safety: { requireLogin: W.querySelector('#stRequireLogin').checked } }, 'Access saved.');
+      await loadMe();   // the effective login wall may have changed
       renderSettings();
       return;
     }
@@ -1952,7 +1867,7 @@ async function settingsAction(act, ctx) {
     if (act === 'sys-add-open') { state.sysSel = '__new__'; renderSettings(); return; }
     if (act === 'sys-add-cancel') { state.sysSel = (state.systems[0] || {}).id || null; renderSettings(); return; }
     if (act === 'sys-add') {
-      const def = { id: W.querySelector('#ssNewId').value.trim(), name: W.querySelector('#ssNewName').value.trim(), host: W.querySelector('#ssNewHost').value.trim() };
+      const def = { id: W.querySelector('#ssNewId').value.trim(), name: W.querySelector('#ssNewName').value.trim() };
       if (!def.id) { setMsg('Enter an id for the new system.', false); return; }
       await apiWrite('/api/systems', 'POST', def);
       state.sysSel = def.id;
@@ -1992,10 +1907,8 @@ async function settingsAction(act, ctx) {
 // current selection when it still exists.
 async function reloadSystems() {
   const sys = await api('/api/systems');
-  state.rrcsEnabled = sys.rrcsEnabled !== false;
   const keep = (state.systems || []).some((x) => x.id === state.system) ? state.system : null;
   populateSystems(sys.systems, keep || sys.default);
-  applyRrcsMode();
 }
 
 function onLogoFile(file) {
@@ -2040,21 +1953,11 @@ function populateSystems(list, def) {
   els.system.value = state.system;
 }
 
-// When RRCS is disabled server-side, the live controls are meaningless — grey
-// out the auto-refresh + Refresh controls.
-function applyRrcsMode() {
-  const on = state.rrcsEnabled;
-  els.refresh.disabled = !on;
-  els.auto.disabled = !on;
-  els.auto.parentElement.style.opacity = on ? '' : '.4';
-  applySubtitle();
-}
-
 // Subtitle = the deployment's branding subtitle (no offline-state suffix).
 function applySubtitle() {
   // Only fall back to the placeholder before settings load — an empty subtitle
   // (deliberately cleared) must show as empty, not snap back to the default.
-  els.subtitle.textContent = state.settings ? (state.settings.branding.subtitle || '') : 'Live intercom matrix';
+  els.subtitle.textContent = state.settings ? (state.settings.branding.subtitle || '') : 'Intercom matrix';
 }
 
 // Swap the brand dot for an uploaded logo (or back).
@@ -2072,8 +1975,8 @@ function applyLogo(uri) {
   }
 }
 
-// Apply shared settings to the live UI. Theme + branding are safe to re-apply
-// any time; `boot` also seeds the per-session header/matrix controls and the
+// Apply shared settings to the UI. Theme + branding are safe to re-apply
+// any time; `boot` also seeds the per-session matrix controls and the
 // landing view/system (so a later save doesn't yank the user's current view).
 function applySettings(boot) {
   const s = state.settings; if (!s) return;
@@ -2083,9 +1986,7 @@ function applySettings(boot) {
   applyLogo(s.branding.logoDataUri);
   applySubtitle();
   if (boot) {
-    if (state.rrcsEnabled) els.auto.value = String(s.display.autoRefreshSec);
     els.mxPanelsOnly.checked = s.display.matrixPanelsOnly;
-    els.mxKeyAccess.checked = s.display.matrixKeyAccess;
   }
 }
 
@@ -2114,17 +2015,12 @@ function applySettings(boot) {
     }
 
     const sys = await api('/api/systems');
-    state.rrcsEnabled = sys.rrcsEnabled !== false;
-    applyRrcsMode();
-    applySettings(true);   // re-apply subtitle now that rrcs state is known
     const def = (state.settings && state.settings.branding.defaultSystem) || sys.default;
     populateSystems(sys.systems, def);
     const view = (state.settings && state.settings.branding.defaultView) || 'matrix';
     if (view !== 'matrix') showView(view);
     await loadSnapshot();
-    if (state.rrcsEnabled && (!state.data || !state.data.ok)) await refreshNow();
   } catch (e) {
     els.statusText.textContent = 'Server unreachable: ' + e.message;
   }
-  if (state.rrcsEnabled) setAuto(els.auto.value);
 })();

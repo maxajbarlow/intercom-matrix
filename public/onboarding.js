@@ -7,7 +7,7 @@
 // app.js. It mostly ORCHESTRATES existing endpoints; the only bespoke server
 // surface is GET /api/onboarding and POST /api/onboarding/admin.
 //
-// Flow: Welcome (how it works) → Admin account → First system (live RRCS OR a
+// Flow: Welcome (how it works) → Admin account → First system (upload a
 // config print) → Branding → Finish. On completion it stamps
 // settings.meta.onboardedAt and reloads into the configured app.
 
@@ -60,7 +60,7 @@
     idx: 0,
     status: null,                 // GET /api/onboarding
     adminDone: false,             // an admin account exists / was created
-    sys: { path: 'rrcs', name: 'Studio A', host: '', port: 8193, createdId: null, busy: false, result: null },
+    sys: { name: 'Studio A', createdId: null, busy: false, result: null },
     brand: { theme: null },       // chosen theme for live preview
     requireLogin: false,
     msgTimer: null,
@@ -142,8 +142,8 @@
     $('obTitle').textContent = 'Welcome to Intercom Matrix';
     $('obSub').textContent = 'A read-only viewer for your intercom systems. Four short steps and you’re live.';
     body.innerHTML = `
-      <div class="ob-note lock"><span class="ico">🔒</span><div><b>It can’t change your intercom.</b> The RRCS client is hard-locked to <code>Get*</code> queries — it physically cannot set or kill a crosspoint. Everyone gets a safe, read-only view of the live communication matrix.</div></div>
-      <div class="ob-note"><span class="ico">📡</span><div><b>Two ways to feed it data.</b> Connect a controller <b>live over RRCS</b> for an always-current view, or upload a <b>config print</b> (export) to work offline from a snapshot. You’ll pick one for your first system next — you can add more later.</div></div>
+      <div class="ob-note lock"><span class="ico">🔒</span><div><b>It can’t change your intercom.</b> The viewer never connects to the intercom system — it reads <b>config prints</b> you upload, so there’s nothing on the network it could alter.</div></div>
+      <div class="ob-note"><span class="ico">📄</span><div><b>Fed by config prints.</b> Upload a “Group &amp; Conference List” print (PDF or text) from the config tool. Each new print becomes the current matrix — you’ll upload the first one next, and can add more systems later.</div></div>
       <div class="ob-note"><span class="ico">📝</span><div><b>Changes are request → verify.</b> The viewer never writes to the system. It captures change <b>intent</b>, groups it into a work order for the engineer, then auto-verifies against the next config print.</div></div>`;
     foot.innerHTML = footHTML({ back: false, next: 'Get started →' });
   }
@@ -195,35 +195,16 @@
       </form>`;
   }
 
-  // Step 2 — First system (live RRCS OR a config print)
+  // Step 2 — First system (upload a config print)
   function renderSystem(body, foot) {
     $('obKicker').textContent = 'Step 2 of 4';
     $('obTitle').textContent = 'Add your first system';
-    $('obSub').textContent = 'Pick how this system is fed. Either path gives you the full Matrix, Conferences and Panels views.';
+    $('obSub').textContent = 'Name it and upload its config print — that gives you the full Matrix, Conferences and Panels views.';
     const s = ob.sys;
-    const seg = `
-      <div class="ob-seg">
-        <div class="opt ${s.path === 'rrcs' ? 'active' : ''}" data-ob="path-rrcs">
-          <div class="t"><span class="ic">📡</span> Connect live (RRCS)</div>
-          <p class="d">Always-current. Needs the controller reachable on this network.</p>
-        </div>
-        <div class="opt ${s.path === 'print' ? 'active' : ''}" data-ob="path-print">
-          <div class="t"><span class="ic">📄</span> Upload a print</div>
-          <p class="d">Offline snapshot from a controller export — works from anywhere, no controller needed.</p>
-        </div>
-      </div>`;
 
     const nameFld = `<label class="ob-fld"><span>System name</span><input id="obSysName" value="${esc(s.name)}" placeholder="Studio A" /><span class="hint">A label like “Studio A”, “Control Room”. The id <code>${esc(slugify(s.name))}</code> is derived from it and fixed once created.</span></label>`;
 
-    const pathBody = s.path === 'rrcs' ? `
-      ${nameFld}
-      <div class="ob-row2">
-        <label class="ob-fld"><span>Controller host / IP</span><input id="obSysHost" value="${esc(s.host)}" placeholder="10.0.0.5" /></label>
-        <label class="ob-fld"><span>Port</span><input id="obSysPort" type="number" value="${esc(s.port)}" /></label>
-      </div>
-      <div class="ob-note lock"><span class="ico">🔒</span><div>Connecting turns on live polling, then runs a single read-only <code>Get*</code> probe. Nothing is ever written to the controller.</div></div>
-      <button class="ob-btn" data-ob="test-rrcs" id="obTest">Test connection</button>
-      <div id="obSysResult"></div>` : `
+    const pathBody = `
       ${nameFld}
       <input type="file" id="obPrintFile" accept=".pdf,.txt" hidden />
       <div class="ob-drop" id="obDrop" data-ob="pick-print">
@@ -233,7 +214,7 @@
       </div>
       <div id="obSysResult"></div>`;
 
-    body.innerHTML = seg + `<div class="ob-fields">${pathBody}</div>`;
+    body.innerHTML = `<div class="ob-fields">${pathBody}</div>`;
     renderSysResult();
     foot.innerHTML = footHTML({ next: 'Continue', skip: 'Skip — add later', primaryDisabled: !s.createdId });
   }
@@ -256,7 +237,7 @@
     body.innerHTML = `
       <div class="ob-fields">
         <label class="ob-fld"><span>Site name</span><input id="obBrandName" value="${esc(ob.brand.name || '')}" placeholder="Intercom Matrix" /></label>
-        <label class="ob-fld"><span>Subtitle</span><input id="obBrandSub" value="${esc(ob.brand.sub || '')}" placeholder="Live intercom matrix" /></label>
+        <label class="ob-fld"><span>Subtitle</span><input id="obBrandSub" value="${esc(ob.brand.sub || '')}" placeholder="Intercom matrix" /></label>
         <div class="ob-fld"><span>Theme</span>
           <div class="ob-seg ob-theme-seg" id="obThemeSeg">
             <div class="opt ${curTheme === 'dark' ? 'active' : ''}" data-ob="theme-dark"><div class="t">◐ Dark</div></div>
@@ -299,9 +280,6 @@
       skip: () => go(+1),
       'create-admin': createAdmin,
       'reveal-login': revealLogin,
-      'path-rrcs': () => { ob.sys.path = 'rrcs'; ob.sys.result = null; render(); },
-      'path-print': () => { ob.sys.path = 'print'; ob.sys.result = null; render(); },
-      'test-rrcs': testRrcs,
       'pick-print': () => $('obPrintFile').click(),
       'theme-dark': () => pickTheme('dark'),
       'theme-light': () => pickTheme('light'),
@@ -382,41 +360,12 @@
     setMsg('Your setup session was lost — please create the admin account again to continue.');
   }
 
-  // Create the system (if needed), enable live polling, probe once.
-  async function testRrcs() {
-    const s = ob.sys;
-    s.name = $('obSysName').value.trim() || 'Studio A';
-    s.host = $('obSysHost').value.trim();
-    s.port = Number($('obSysPort').value) || 8193;
-    if (!s.host) return setMsg('Enter the controller host or IP.');
-    try {
-      s.busy = 'Connecting…'; s.result = null; renderSysResult(); $('obTest').disabled = true;
-      if (!s.createdId) s.createdId = await createSystemFor({ host: s.host, port: s.port });
-      else await sendJSON('/api/systems/' + encodeURIComponent(s.createdId), 'PATCH', { host: s.host, port: s.port });
-      await sendJSON('/api/settings', 'PATCH', { safety: { rrcsEnabled: true } });   // live view needs polling on
-      const st = await sendJSON('/api/refresh?system=' + encodeURIComponent(s.createdId), 'POST');
-      s.busy = false;
-      if (st.ok && st.counts) {
-        s.result = { ok: true, short: `${st.counts.panels} panels`, text: `Connected — ${st.counts.panels} panels · ${st.counts.conferences} conferences.` };
-      } else {
-        s.result = { ok: false, text: 'Couldn’t reach the controller: ' + (st.lastError || st.error || 'no response') + '. The system is saved — fix the host later in Settings.' };
-      }
-    } catch (err) {
-      if (isAuthLoss(err)) return recoverLostSession();
-      s.busy = false;
-      s.result = { ok: false, text: err.message || 'Connection test failed.' };
-    }
-    const tb = $('obTest'); if (tb) tb.disabled = false;
-    renderSysResult();
-    syncNextEnabled();
-  }
-
   async function uploadPrint(file) {
     const s = ob.sys;
     s.name = ($('obSysName') || {}).value.trim() || s.name || 'System';
     try {
       s.busy = `Parsing ${file.name}…`; s.result = null; renderSysResult();
-      if (!s.createdId) s.createdId = await createSystemFor({});           // offline: no host
+      if (!s.createdId) s.createdId = await createSystemFor({});
       const info = await sendRaw('/api/print-file?system=' + encodeURIComponent(s.createdId) + '&name=' + encodeURIComponent(file.name), await file.arrayBuffer());
       s.busy = false;
       const c = info.conferences != null ? `${info.conferences} conferences` : 'loaded';

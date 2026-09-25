@@ -1,21 +1,17 @@
 {
   "branding": {
     "siteName": "Intercom Matrix",
-    "subtitle": "Live intercom matrix",
+    "subtitle": "Intercom matrix",
     "logoDataUri": "",
     "defaultSystem": "studio-a",
     "defaultView": "matrix"
   },
   "display": {
-    "autoRefreshSec": 30,
     "theme": "dark",
     "matrixPanelsOnly": false,
-    "matrixKeyAccess": true,
     "dateFormat": "medium"
   },
   "safety": {
-    "rrcsEnabled": false,
-    "minRefreshSec": 3,
     "requireLogin": false
   }
 }

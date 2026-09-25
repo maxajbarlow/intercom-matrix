@@ -1,20 +1,21 @@
 # Intercom Matrix
 
-A live, hostable, multi-client viewer for one or more intercom
-systems — driven entirely by the **read-only** RRCS API. Host it on a box on the
-intercom network and anyone can open it in a browser; it pulls the current state
-from each controller and presents three views, with a system selector to
-switch between deployments (e.g. Studio A / Studio B / Control Room).
+A hostable, multi-client viewer for one or more intercom systems, fed by
+**config prints**: the "Group & Conference List" exported from the config tool
+(PDF or extracted text). Upload a print per system and anyone can open the
+viewer in a browser. It presents three views, with a system selector to switch
+between deployments (e.g. Studio A / Studio B / Control Room). It never
+connects to the intercom system itself.
 
 ## Views
 
 - **Matrix** — a panel × conference grid. Each cell shows the direction:
-  ● Talk · ○ Listen · ⊗ both · ·· via key. Filter rows (panels) and columns
-  (conferences), restrict to physical panels only, or toggle key-access.
+  ● Talk · ○ Listen · ⊗ both. Filter rows (panels) and columns (conferences),
+  or restrict to physical panels only.
 - **Conferences** — pick a conference (or group) and see every member, its type,
   and its Talk/Listen direction.
-- **Panels** — pick a panel/port and see every conference it belongs to, marked
-  **Member** (permanent) or **Via key** (from the loaded config), with direction.
+- **Panels** — pick a panel/port and see every conference it has a key to, with
+  its direction.
 
 Any view can be exported to a styled **Excel workbook** (the **⬇ Excel** button)
 with three sheets mirroring the UI: a frozen-pane **Matrix** grid (panels ×
@@ -49,12 +50,12 @@ writes a timestamped copy). Requests are attributed to the **signed-in user**
 
 ## Read-only & safe
 
-The RRCS client is hard-locked to `Get*` query methods (`GetAllPorts`,
-`GetAllConferences`, `GetAllGroups`). It physically cannot call `SetXp`,
-`KillXp`, or anything that changes the live system. Viewers share one
-server-side cached snapshot per system, and a lock + 3 s minimum interval mean a
-controller is never hammered no matter how many people connect. A failed refresh
-keeps the **last good data** (shown as *stale*) rather than blanking out.
+The viewer has **no connection to the intercom system**. Its only input is the
+config prints engineers upload, so there is nothing on the intercom network it
+could read from or change. Every upload is kept as a **version**. The newest is
+the current matrix, and any two versions can be diffed. Open browsers pick up a
+newly uploaded print when the tab regains focus (with a 60-second background
+check), so nobody has to press refresh.
 
 ## Installation & setup
 
@@ -71,9 +72,6 @@ keeps the **last good data** (shown as *stale*) rather than blanking out.
   degrades gracefully). Install with `brew install poppler` (macOS) or
   `sudo apt-get install -y poppler-utils` (Debian/Ubuntu). **On Windows it's
   bundled** (`vendor/poppler/win-x64`) and resolved automatically — no install.
-- **TCP reachability** to each controller's RRCS port (default `8193`) — only if
-  you use the live-RRCS source. The offline config-print source needs no
-  controller access at all.
 
 ### Windows: one-click setup
 
@@ -121,7 +119,7 @@ npm start          # → http://localhost:8080
 ```
 
 Serve on a different port with `PORT=9000 npm start`. The process logs the URL
-and each system's connection status on boot. Stop it with Ctrl-C; nothing is
+and each system (with whether it has a print yet) on boot. Stop it with Ctrl-C; nothing is
 written outside the project directory (state lives in `data/`, `systems.json`,
 and `settings.json`, all gitignored).
 
@@ -131,17 +129,15 @@ Open the URL in a browser. On a fresh install a four-step **first-run wizard**
 walks you through it:
 
 1. **Create the admin account** (scrypt-hashed locally; this is your way in).
-2. **Add your first system** — either *connect a controller live over RRCS*
-   (with a one-click **Test connection**) **or** *upload a config print* to
-   work offline from a snapshot. Either gives you the full Matrix / Conferences /
-   Panels views.
+2. **Add your first system**: name it and upload its config print (PDF or
+   text). That gives you the full Matrix / Conferences / Panels views.
 3. **Branding & theme** (optional — name, subtitle, dark/light).
 4. **Finish** — a recap of the read-only / request→verify model, an optional
    *Require login* wall, and you're in.
 
 The wizard only orchestrates the same endpoints the Settings panel uses, so
 nothing it does is special — you can also configure everything by hand (below),
-and an admin can replay it any time from **Settings → Safety → Re-run setup**.
+and an admin can replay it any time from **Settings → Access → Re-run setup**.
 
 The wizard appears only until setup is marked complete; an install that already
 has an admin, a configured system, or the login wall on is detected at boot and
@@ -153,26 +149,28 @@ on an untrusted network), set `ONBOARDING_OPEN=0`.
 Prefer files? Skip the wizard entirely by configuring `systems.json` up front:
 
 ```bash
-cp systems.example.json systems.json     # then fill in each system's host
+cp systems.example.json systems.json     # then rename the systems you need
 npm start                                 # → http://localhost:8080
 ```
 
-Each system's controller can also be set/repointed from the UI ("Controller"
-field) — that's persisted back to `systems.json`.
+Then upload each system's config print in **Settings → Systems**.
 
 ### systems.json
 
 ```json
 [
-  { "id": "studio-a",   "name": "Studio A",         "host": "10.x.x.x", "port": 8193, "config": "" },
-  { "id": "studio-b", "name": "Studio B",    "host": "10.x.x.x", "port": 8193, "config": "" },
-  { "id": "control-room",  "name": "Control Room", "host": "10.x.x.x", "port": 8193, "config": "" }
+  { "id": "studio-a",     "name": "Studio A" },
+  { "id": "studio-b",     "name": "Studio B" },
+  { "id": "control-room", "name": "Control Room", "topology": "topology/control-room.txt" }
 ]
 ```
 
-`config` is an optional path to a controller config (`.Art`/`.ash`) for that system (adds
-key-access — see below). `systems.json` is gitignored (it holds controller IPs);
-commit only `systems.example.json`.
+`topology` is an optional path to a node-configuration tree (see below). `print`
+is an optional path to a seed print, imported as version 1 on first boot. After
+that, uploads made in the UI are the source. `systems.json` is gitignored; commit
+only `systems.example.json`. Entries from older versions that still carry
+`host` / `port` / `config` / `vsp` load fine: those fields are ignored and
+dropped the next time the file is saved.
 
 ### Environment
 
@@ -181,9 +179,6 @@ commit only `systems.example.json`.
 | `PORT` | `8080` | HTTP port to serve on |
 | `SYSTEMS_FILE` | `./systems.json` | path to the systems definition |
 | `SETTINGS_FILE` | `./settings.json` | path to the deployment settings (see below) |
-| `REFRESH_SEC` | `0` | server-side auto-refresh interval per system (0 = off) |
-| `RRCS_HOST` | — | fallback single system if no `systems.json` |
-| `RRCS_ENABLED` | `off` | **seed** for the live-polling toggle on first run; thereafter `settings.json` is the source of truth |
 | `ONBOARDING_OPEN` | `on` | allow the first-run wizard to create the first admin without auth (locks once one exists). Set `0` to require the env bootstrap admin instead |
 | `PRINTS_DIR` | `./prints` | where uploaded config prints are versioned (gitignored) |
 
@@ -222,13 +217,12 @@ Add any of these to the `docker run` command:
 
 | Goal | Add |
 |------|-----|
-| Live RRCS controllers | `-v "$PWD/systems.json:/app/systems.json:ro" -e RRCS_ENABLED=on` |
+| Pre-defined systems | `-v "$PWD/systems.json:/app/systems.json"` |
 | Break-glass admin | `-e LOCAL_ADMIN_USER=admin -e LOCAL_ADMIN_PASS='change-me'` |
 | Behind a TLS proxy | `-e COOKIE_SECURE=1` |
 | Different port | `-p 9000:8080` |
 
-A `HEALTHCHECK` polls `/api/systems` (200 even with zero systems). Mount
-`systems.json` read-only so controller IPs are never baked into the image.
+A `HEALTHCHECK` polls `/api/systems` (200 even with zero systems).
 
 #### Build it yourself instead
 
@@ -248,7 +242,7 @@ docker run -d --name intercom-matrix -p 8080:8080 -v intercom-data:/data interco
   LDAP/SAML secrets survive a redeploy; otherwise one is generated at
   `data/.secret-key` on first run.
 - **Break-glass admin:** provide `LOCAL_ADMIN_USER` / `LOCAL_ADMIN_PASS` so you
-  always have a way in, then turn on **Require login** (Settings → Safety) if the
+  always have a way in, then turn on **Require login** (Settings → Access) if the
   network isn't trusted. See [Authentication](#authentication) for LDAP / SAML.
 - **Persist `data/`:** it holds the request and auth databases (the only state
   not re-derivable from a config print).
@@ -265,19 +259,22 @@ The **⚙ Settings** tab is the no-files-needed way to tailor a deployment in th
 field. It edits two server-owned, gitignored files (commit only their
 `.example` copies):
 
-- **`systems.json`** — the systems list. Add / rename / reorder / delete systems
-  and edit each one's controller IP, port, and offline source paths (key-access
-  config, topology tree, VSP export) right from the UI. The system **id** is
-  fixed once created (it keys stored prints & requests).
-- **`settings.json`** — everything else, in four groups:
-  - **Branding** — site name, subtitle, logo, default system, default landing view.
-  - **Display defaults** — auto-refresh, theme (dark/light), matrix defaults,
-    date format. Applied to every client on first load; each viewer can still
-    override in-session from the header.
-  - **Safety** — the RRCS live-polling toggle, the minimum refresh interval
-    (3 s floor; RRCS stays read-only regardless), and the **Require login** wall.
-  - **Users** — local username/password accounts (admin-managed) and the
+- **`systems.json`**: the systems list. Add / rename / reorder / delete
+  systems, upload each one's config prints (with version history and diffs) and
+  optional topology tree, right from the UI. The system **id** is fixed once
+  created (it keys stored prints & requests).
+- **`settings.json`**: everything else, in four groups:
+  - **Branding**: site name, subtitle, logo, default system, default landing view.
+  - **Display defaults**: theme (dark/light), matrix defaults, date format.
+    Applied to every client on first load; each viewer can still override
+    in-session.
+  - **Access**: the **Require login** wall (forced on once customer groups
+    exist) and the re-run-setup button.
+  - **Users**: local username/password accounts (admin-managed) and the
     read-only status of the LDAP and SAML sign-in paths.
+
+Customer groups live in **Settings → Customers** (see
+[Customer groups](#customer-groups-scoped-channel-views)).
 
 ```bash
 cp settings.example.json settings.json    # optional — sensible defaults apply if absent
@@ -387,7 +384,7 @@ source of truth:
   exactly which ones.
 - Nothing is stored as a conference list. The set is worked out from the current
   data on every request, so **a conference added to an FIA panel appears for FIA
-  with the next print or refresh**, with no one editing the group.
+  with the next print upload**, with no one editing the group.
 - Matrix rows are everyone on those conferences, but each panel's memberships
   are cut to the group's conferences. A shared panel never reveals the rest.
 - Members are local **usernames** and/or **LDAP/SAML directory groups** (DN or
@@ -402,74 +399,40 @@ requests. Customers can only raise requests on their own channels, and only see
 requests about them. The logic is in `lib/customer-scope.js` (pure derivation)
 and `lib/customer-access.js` (applied per request).
 
-## Key-access (optional)
-
-Conference *membership* is permanent and authoritative. Some panels also reach
-conferences via **keys** (press-to-talk) without being members. That programming
-isn't in RRCS, but it is in the controller config file. Load a `.Art` or `.ash`
-per system (the **+ Key-access** button, or the `config` path in `systems.json`)
-and those panels gain "Via key" edges, joined to the live system by ObjectID and
-clearly distinguished from permanent membership. (Config files are not committed
-to this repo.)
-
 ## Node / Card grouping (optional)
 
 Load a controller **node-configuration tree** (`Net → Node → Card/Bay → Port`) per
-system to group and filter the views by node and card. It's joined to the live
-ports by name; once loaded, the **Matrix** and **Panels** views gain **Node** and
-**Card/Bay** dropdowns. Load it via the **+ Topology** button, or set a
-`topology` path in `systems.json`. See `topology/README.md`. (Trees hold the full
-port inventory and are not committed.)
+system to group and filter the views by node and card. It's joined to the
+print's panels by name (and fills in panel names the print truncated). Once
+loaded, the **Matrix** and **Panels** views gain **Node** and **Card/Bay**
+dropdowns. Load it via the topology **Upload** button in Settings → Systems, or
+set a `topology` path in `systems.json`. See `topology/README.md`. (Trees hold
+the full port inventory and are not committed.)
 
-## Virtual system — load a VSP export (optional)
+## Updating the data
 
-If you can produce a VSP key-function-programming **export** as JSON, the app can
-load it as a read-only system called **Virtual**, alongside the intercom systems —
-with the same Matrix / Conferences / Panels views and Excel export. Producing the
-export is out of scope for this project; bring your own.
-
-1. Place the export at `data/vsp-export.json` (gitignored — exports hold
-   production config).
-2. Add a system to `systems.json`:
-   `{ "id": "virtual", "name": "Virtual", "vsp": "data/vsp-export.json" }`.
-3. Restart. `lib/vsp-model.js` maps the export into the snapshot shape.
-
-The expected export shape (ports × targets with a Talk/Listen cell for each
-relationship):
-
-```json
-{
-  "source": "vsp", "system": "…", "generatedAt": "…",
-  "ports":   [{ "uuid": "…", "label": "…", "longName": "…", "trunk": false }],
-  "targets": [{ "uuid": "…", "label": "…", "kind": "conference|member|group|ifb" }],
-  "cells":   [{ "portUuid": "…", "targetUuid": "…", "talk": true, "listen": false }]
-}
-```
-
-## Updating
-
-- Each viewer has an **Auto** selector (Off / 10s / 30s / 1m / 5m) plus a manual
-  **Refresh**.
-- Optionally run with `REFRESH_SEC` so the shared cache stays warm even with no
-  one watching.
+Upload a new config print whenever the configuration changes. It becomes the
+current matrix, is kept as a new version (diffable against earlier ones), and
+reconciles open change requests. Open browsers pick it up when the tab regains
+focus, or within a minute in the background.
 
 ## API (most take `?system=<id>`)
 
-The matrix/snapshot endpoints are read-only and never touch the live system. The
-change-request endpoints write only to the local request DB — never to RRCS.
+The matrix/snapshot endpoints are read-only. The change-request endpoints write
+only to the local request DB. Nothing ever talks to the intercom system.
 
 | Endpoint | Returns |
 |---|---|
 | `GET /api/systems` | list of systems + status |
-| `GET /api/status` | connection state, counts, stale flag, last-fetch time |
+| `GET /api/status` | whether a print is loaded, counts, print timestamp |
 | `GET /api/snapshot` | full model (matrix + conferences + panels) |
 | `GET /api/matrix` | rows / cols / sparse cells |
 | `GET /api/conferences` | conferences & groups with members |
 | `GET /api/panels` | panels with their conference memberships |
 | `GET /api/export.xlsx` | the current snapshot as a 3-sheet Excel workbook (Matrix / Conferences / Panels) |
-| `POST /api/refresh` | re-pull from RRCS for a system |
-| `POST /api/system-config` | point a system at a controller (persisted; admin) |
-| `POST /api/config-file` | load a `.Art`/`.ash` for key-access |
+| `POST /api/print-file` | upload a config print (PDF or text) as a new version (editor) |
+| `GET /api/print-versions` · `GET /api/print-diff` | version history and a diff between two versions |
+| `POST /api/topology-file` | upload a node/card topology tree (editor) |
 | `GET /api/requests` | change requests + status counts |
 | `POST /api/requests` | create a request (membership change or new conference) |
 | `GET /api/requests/:id` | one request: changes, validation, comments, history |
@@ -488,11 +451,11 @@ channels (see *Customer groups*).
 
 ## What it is (and isn't)
 
-The intercom routing in an intercom system *is* the conference membership, so this
-shows the real communication matrix — who talks/listens to whom — resolved to
-authoritative names from `GetAllPorts`. Per-physical-key target programming isn't
-exposed by RRCS on all firmware (`GetAllKeyConfigurations`); the optional
-`.Art`/`.ash` key-access fills in the conference keys a panel can reach.
+A config print lists, for every conference and group, the panel keys assigned
+to it and their Talk/Listen direction. So the matrix shows exactly what the
+configuration says: who talks to and listens on which conference. It's as current
+as the latest uploaded print. It is not a live view of crosspoint state, and
+changes made in the config tool appear only once a new print is uploaded.
 
 ## License
 

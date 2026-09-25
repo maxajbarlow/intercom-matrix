@@ -70,5 +70,5 @@ Pass flags through the `.bat`:
 - **SmartScreen warns about the downloaded files.** Node and the VC++ redist are
   fetched from `nodejs.org` and `microsoft.com` respectively; that's expected.
 
-For the full configuration guide (RRCS sources, auth, Docker, etc.) see the
+For the full configuration guide (config prints, auth, Docker, etc.) see the
 [main README](../README.md).

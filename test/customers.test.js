@@ -48,9 +48,9 @@ const send = (p, method, body, cookie) => fetch(BASE + p, { method, headers: as(
 const uploadPrint = (text, name) => fetch(`${BASE}/api/print-file?system=f1&name=${name}`, { method: 'POST', headers: { Cookie: admin, 'Content-Type': 'text/plain' }, body: text });
 
 before(async () => {
-  fs.writeFileSync(path.join(tmpDir, 'systems.json'), JSON.stringify([{ id: 'f1', name: 'F1', host: '' }, { id: 'f2', name: 'F2', host: '' }]));
+  fs.writeFileSync(path.join(tmpDir, 'systems.json'), JSON.stringify([{ id: 'f1', name: 'F1' }, { id: 'f2', name: 'F2' }]));
   const env = {
-    ...process.env, PORT: String(PORT), NODE_ENV: 'test', RRCS_ENABLED: 'off',
+    ...process.env, PORT: String(PORT), NODE_ENV: 'test',
     SYSTEMS_FILE: path.join(tmpDir, 'systems.json'), SETTINGS_FILE: path.join(tmpDir, 'settings.json'),
     AUTH_DB: path.join(tmpDir, 'auth.db'), AUTH_CONFIG_FILE: path.join(tmpDir, 'auth-config.json'),
     SECRET_KEY_FILE: path.join(tmpDir, '.secret-key'), PRINTS_DIR: path.join(tmpDir, 'prints'), REQUESTS_DIR: tmpDir,
@@ -84,13 +84,6 @@ test('customer-group admin endpoints are admin-only', async () => {
   assert.equal((await get('/api/customers', viewer)).status, 403);
   assert.equal((await send('/api/customers', 'POST', { name: 'x' }, viewer)).status, 403);
   assert.equal((await send('/api/customers/preview?system=f1', 'POST', { sources: [] }, viewer)).status, 403);
-});
-
-test('only admins can repoint a system at a controller', async () => {
-  const viewer = await login('fia1', 'secret123');
-  assert.equal((await send('/api/system-config', 'POST', { system: 'f2', host: '10.9.9.9' }, viewer)).status, 403);
-  assert.equal((await fetch(`${BASE}/api/system-config`, { method: 'POST', headers: J, body: JSON.stringify({ system: 'f2', host: '10.9.9.9' }) })).status, 403);
-  assert.equal((await send('/api/system-config', 'POST', { system: 'f2', host: '' }, admin)).status, 200);
 });
 
 test('preview resolves source panels to conferences before saving', async () => {
@@ -152,7 +145,7 @@ test('the XLSX export is scoped too', async () => {
   assert.ok(!text.some((t) => t === 'SysOps'), 'export leaked SysOps');
 });
 
-test('/api/systems lists only systems with FIA source panels, without connection details', async () => {
+test('/api/systems lists only systems with FIA source panels, without source file details', async () => {
   const s = await getJson('/api/systems', fia);
   assert.deepStrictEqual(s.systems.map((x) => x.id), ['f1']);
   assert.equal(s.default, 'f1');
