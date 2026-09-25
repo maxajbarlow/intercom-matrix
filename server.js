@@ -23,7 +23,10 @@ const buildAuthRouter = require('./lib/auth-routes');
 const buildSamlRouter = require('./lib/saml-routes');
 require('./lib/crypto-vault').ensureKey();   // mint/load the at-rest secret key at boot
 const { buildWorkbookBuffer } = require('./lib/xlsx-export');
-const { currentUser, can } = require('./lib/identity');
+const { currentUser, can, loginRequired } = require('./lib/identity');
+const customerDb = require('./lib/customer-db');
+const access = require('./lib/customer-access');
+const { resolveScope, filterPrintDiff } = require('./lib/customer-scope');
 
 const PORT = Number(process.env.PORT) || 8080;
 const REFRESH_SEC = process.env.REFRESH_SEC != null ? Number(process.env.REFRESH_SEC) : 0;
@@ -51,10 +54,11 @@ app.use('/api/auth/saml', buildSamlRouter({
   sessionTtl: authDb.SESSION_TTL_SEC,
 }));
 
-// Optional login wall. When safety.requireLogin is on, every /api route except
-// /api/auth/* needs a valid session; otherwise anonymous = read-only viewer.
+// Optional login wall. When safety.requireLogin is on — or forced on because
+// customer groups exist (an anonymous viewer can't be scoped) — every /api route
+// except /api/auth/* needs a valid session; otherwise anonymous = read-only viewer.
 app.use('/api', (req, res, next) => {
-  if (!settings.requireLogin()) return next();
+  if (!loginRequired()) return next();
   // Always-open even behind the wall: auth endpoints, and the read-only settings
   // GET (so the login screen can render the deployment's branding & theme).
   if (req.path.startsWith('/auth/')) return next();
@@ -69,6 +73,18 @@ app.use('/api', (req, res, next) => {
 
 const sysId = (req) => (req.query.system || req.body?.system || svc.defaultSystem());
 
+// Customer scoping (lib/customer-access). EVERY route that returns system data
+// goes through scoped(): admins/editors and customer-less deployments get the
+// full snapshot; a customer viewer gets only their channels.
+const scoped = (req) => access.scopedSnapshot(currentUser(req), sysId(req));
+// { scope, userId } for request-service, or null when unscoped.
+function visibleTo(req) {
+  const user = currentUser(req);
+  const scope = access.scopeFor(user, sysId(req));
+  return scope ? { scope, userId: user.id } : null;
+}
+const errStatus = (e) => e.status || 400;
+
 // Authorization gate — 403s unless the session identity may perform `action`.
 // Deployment-config writes (settings, system CRUD, users) require the admin
 // role; everything else is open (see lib/identity.js can()).
@@ -76,10 +92,15 @@ const gate = (action) => (req, res, next) =>
   can(currentUser(req), action) ? next() : res.status(403).json({ error: `"${action}" requires the admin role` });
 
 // --- Systems -----------------------------------------------------------------
-app.get('/api/systems', (req, res) => res.json({ default: svc.defaultSystem(), systems: svc.listSystems(), autoRefreshSec: REFRESH_SEC, rrcsEnabled: svc.rrcsEnabled() }));
+app.get('/api/systems', (req, res) => {
+  const systems = access.visibleSystems(currentUser(req));
+  const def = systems.some((x) => x.id === svc.defaultSystem()) ? svc.defaultSystem() : (systems[0] ? systems[0].id : null);
+  res.json({ default: def, systems, autoRefreshSec: REFRESH_SEC, rrcsEnabled: svc.rrcsEnabled() });
+});
 
-// Point a system at a controller from the UI (persisted to systems.json).
-app.post('/api/system-config', (req, res) => {
+// Point a system at a controller (persisted to systems.json). Admin-only: it
+// repoints the data source EVERY viewer and customer group sees.
+app.post('/api/system-config', gate('system:update'), (req, res) => {
   try { res.json(svc.setSystemHost(req.body?.system, req.body?.host, req.body?.port)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -200,7 +221,50 @@ app.patch('/api/users/:username', gate('user:update'), (req, res) => {
 });
 app.delete('/api/users/:username', gate('user:delete'), (req, res) => {
   const ok = localUsers.deleteLocalUser(authDb.getDb(), req.params.username);
+  if (ok) customerDb.removeUser(authDb.getDb(), req.params.username);
   ok ? res.json({ ok: true }) : res.status(404).json({ error: 'User not found' });
+});
+
+// --- Customer groups — admin-gated ---------------------------------------------
+// A group is a set of SOURCE PANELS per system; the conferences its members see
+// are derived live from those panels (lib/customer-scope). Members are local
+// usernames and/or LDAP/SAML directory groups.
+app.get('/api/customers', gate('customer:read'), (req, res) => res.json({ customers: customerDb.listCustomers(authDb.getDb()) }));
+app.post('/api/customers', gate('customer:write'), (req, res) => {
+  try {
+    const db = authDb.getDb();
+    const c = customerDb.createCustomer(db, req.body || {});
+    const { sources, users, dirGroups } = req.body || {};
+    const out = (sources || users || dirGroups) ? customerDb.updateCustomer(db, c.id, { sources, users, dirGroups }) : c;
+    res.status(201).json(out);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.patch('/api/customers/:id', gate('customer:write'), (req, res) => {
+  try {
+    const b = req.body || {};
+    const patch = {};
+    for (const k of ['name', 'description', 'sources', 'users', 'dirGroups']) if (b[k] !== undefined) patch[k] = b[k];
+    res.json(customerDb.updateCustomer(authDb.getDb(), req.params.id, patch));
+  } catch (e) { res.status(e.message === 'Customer group not found' ? 404 : 400).json({ error: e.message }); }
+});
+app.delete('/api/customers/:id', gate('customer:write'), (req, res) => {
+  customerDb.deleteCustomer(authDb.getDb(), req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Customer group not found' });
+});
+// Dry-run: what would these source panels resolve to on this system right now?
+// Drives the admin editor's live "resolves to N conferences" preview.
+app.post('/api/customers/preview', gate('customer:read'), (req, res) => {
+  const snap = svc.getSnapshot(sysId(req));
+  if (!snap) return res.status(404).json({ error: 'unknown system' });
+  const sources = Array.isArray(req.body?.sources) ? req.body.sources.map((x) => ({ addr: String(x?.addr || x?.name || ''), name: String(x?.name || x?.addr || '') })) : [];
+  const scope = resolveScope(snap, sources);
+  const dests = [...(snap.conferences || []), ...(snap.groups || [])].filter((d) => scope.confNames.has(d.name));
+  res.json({
+    system: snap.system, ok: snap.ok,
+    conferences: dests.map((d) => ({ name: d.name, label: d.label, kind: d.kind })),
+    panelCount: scope.panelAddrs.size,
+    matched: scope.matchedSources.length,
+    missing: scope.missingSources.map((x) => x.name || x.addr),
+  });
 });
 
 // --- LDAP / SAML connection config (admin-only; secrets masked on read) -------
@@ -224,18 +288,18 @@ app.post('/api/auth-config/ldap/test', gate('authconfig:write'), async (req, res
 
 // --- Per-system data (read-only) ---------------------------------------------
 app.get('/api/status', (req, res) => {
-  const s = svc.getSnapshot(sysId(req));
+  const s = scoped(req);
   if (!s) return res.status(404).json({ error: 'unknown system' });
   res.json({ ok: s.ok, error: s.error, stale: s.stale, lastError: s.lastError, lastErrorAt: s.lastErrorAt, system: s.system, host: s.host, port: s.port, fetchedAt: s.fetchedAt, counts: s.counts, config: s.config, autoRefreshSec: REFRESH_SEC });
 });
-app.get('/api/snapshot', (req, res) => { const s = svc.getSnapshot(sysId(req)); s ? res.json(s) : res.status(404).json({ error: 'unknown system' }); });
-app.get('/api/matrix', (req, res) => { const s = svc.getSnapshot(sysId(req)); s ? res.json({ ok: s.ok, system: s.system, fetchedAt: s.fetchedAt, matrix: s.matrix }) : res.status(404).json({ error: 'unknown system' }); });
-app.get('/api/conferences', (req, res) => { const s = svc.getSnapshot(sysId(req)); s ? res.json({ ok: s.ok, fetchedAt: s.fetchedAt, conferences: s.conferences, groups: s.groups }) : res.status(404).json({ error: 'unknown system' }); });
-app.get('/api/panels', (req, res) => { const s = svc.getSnapshot(sysId(req)); s ? res.json({ ok: s.ok, fetchedAt: s.fetchedAt, panels: s.panels }) : res.status(404).json({ error: 'unknown system' }); });
+app.get('/api/snapshot', (req, res) => { const s = scoped(req); s ? res.json(s) : res.status(404).json({ error: 'unknown system' }); });
+app.get('/api/matrix', (req, res) => { const s = scoped(req); s ? res.json({ ok: s.ok, system: s.system, fetchedAt: s.fetchedAt, matrix: s.matrix }) : res.status(404).json({ error: 'unknown system' }); });
+app.get('/api/conferences', (req, res) => { const s = scoped(req); s ? res.json({ ok: s.ok, fetchedAt: s.fetchedAt, conferences: s.conferences, groups: s.groups }) : res.status(404).json({ error: 'unknown system' }); });
+app.get('/api/panels', (req, res) => { const s = scoped(req); s ? res.json({ ok: s.ok, fetchedAt: s.fetchedAt, panels: s.panels }) : res.status(404).json({ error: 'unknown system' }); });
 
 // Export the current snapshot to a 3-sheet .xlsx (Matrix / Conferences / Panels).
 app.get('/api/export.xlsx', async (req, res) => {
-  const s = svc.getSnapshot(sysId(req));
+  const s = scoped(req);
   if (!s) return res.status(404).json({ error: 'unknown system' });
   if (!s.ok) return res.status(409).json({ error: 'no data to export yet for this system' });
   try {
@@ -251,7 +315,8 @@ app.get('/api/export.xlsx', async (req, res) => {
 // Trigger a read-only re-pull for one system.
 app.post('/api/refresh', async (req, res) => {
   try {
-    const s = await svc.refresh(sysId(req), { force: true });
+    await svc.refresh(sysId(req), { force: true });
+    const s = scoped(req);
     res.json({ ok: s.ok, error: s.error, stale: s.stale, lastError: s.lastError, system: s.system, host: s.host, fetchedAt: s.fetchedAt, counts: s.counts });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -296,32 +361,56 @@ app.delete('/api/print-file', gate('source:write'), (req, res) => { try { res.js
 
 // Version history + GitHub-style diff between two stored print versions.
 app.get('/api/print-versions', (req, res) => res.json({ versions: svc.printVersions(sysId(req)) }));
-app.get('/api/print-diff', (req, res) => { try { res.json(svc.printDiff(sysId(req), req.query.from, req.query.to)); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.get('/api/print-diff', (req, res) => {
+  try {
+    const diff = svc.printDiff(sysId(req), req.query.from, req.query.to);
+    const v = visibleTo(req);
+    res.json(v ? filterPrintDiff(diff, v.scope) : diff);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 
 // --- Change-request platform -------------------------------------------------
 // Requests capture change INTENT (no live writes); an engineer applies them in
 // the config tool and the next print reconciles them. Identity is claimed (no auth yet).
 app.get('/api/requests', (req, res) => {
-  try { res.json({ requests: requests.listRequests({ system: sysId(req), status: req.query.status }), stats: requests.stats(sysId(req)) }); }
+  try { const v = visibleTo(req); res.json({ requests: requests.listRequests({ system: sysId(req), status: req.query.status }, v), stats: requests.stats(sysId(req), v) }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/requests', (req, res) => {
-  try { res.status(201).json(requests.createRequest({ ...req.body, system: sysId(req) }, currentUser(req))); }
-  catch (e) { res.status(400).json({ error: e.message }); }
+  try { res.status(201).json(requests.createRequest({ ...req.body, system: sysId(req) }, currentUser(req), visibleTo(req))); }
+  catch (e) { res.status(errStatus(e)).json({ error: e.message }); }
 });
+// A request's scope is judged on ITS system, not the ?system= of the call.
+function requestVisibleTo(req, id) {
+  const user = currentUser(req);
+  if (!user.customers) return { ok: true, v: null };
+  const bare = requests.getRequest(id);
+  if (!bare) return { ok: false };
+  const scope = access.scopeFor(user, bare.system);
+  const v = { scope, userId: user.id };
+  return { ok: !!requests.getRequest(id, v), v };
+}
 app.get('/api/requests/:id', (req, res) => {
-  const r = requests.getRequest(Number(req.params.id));
+  const id = Number(req.params.id);
+  const vis = requestVisibleTo(req, id);
+  const r = vis.ok ? requests.getRequest(id, vis.v) : null;
   r ? res.json(r) : res.status(404).json({ error: 'unknown request' });
 });
 app.post('/api/requests/:id/transition', (req, res) => {
-  try { res.json(requests.transition(Number(req.params.id), req.body?.to, currentUser(req), req.body?.note)); }
+  const id = Number(req.params.id);
+  const vis = requestVisibleTo(req, id);
+  if (!vis.ok) return res.status(404).json({ error: 'unknown request' });
+  try { requests.transition(id, req.body?.to, currentUser(req), req.body?.note); res.json(requests.getRequest(id, vis.v)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/requests/:id/comments', (req, res) => {
-  try { res.json(requests.addComment(Number(req.params.id), currentUser(req), req.body?.body)); }
+  const id = Number(req.params.id);
+  const vis = requestVisibleTo(req, id);
+  if (!vis.ok) return res.status(404).json({ error: 'unknown request' });
+  try { requests.addComment(id, currentUser(req), req.body?.body); res.json(requests.getRequest(id, vis.v)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.get('/api/pending', (req, res) => { try { res.json(requests.pendingChanges(sysId(req))); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.get('/api/pending', (req, res) => { try { res.json(requests.pendingChanges(sysId(req), visibleTo(req))); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.get('/api/work-order', gate('workorder:read'), (req, res) => { try { res.json(requests.workOrder(sysId(req))); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.post('/api/requests-reconcile', (req, res) => { try { res.json(requests.reconcile(sysId(req))); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.post('/api/requests-backup', (req, res) => { try { res.json(requests.backup()); } catch (e) { res.status(400).json({ error: e.message }); } });

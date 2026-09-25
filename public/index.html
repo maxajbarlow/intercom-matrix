@@ -19,6 +19,7 @@
   </script>
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="onboarding.css" />
+  <link rel="stylesheet" href="customers.css" />
 </head>
 <body>
   <header class="topbar">
@@ -52,6 +53,7 @@
         </select>
       </label>
       <button class="btn primary" id="refreshBtn">Refresh</button>
+      <span class="scope-badge hidden" id="scopeBadge" role="status"></span>
       <div class="profile" id="profile">
         <button class="profile-btn" id="profileBtn" title="Account" aria-haspopup="menu" aria-expanded="false">
           <span class="profile-av" id="profileAv">◐</span>
@@ -249,6 +251,7 @@
 
   <!-- First-run wizard loads before app.js so init() can hand off to it. -->
   <script src="onboarding.js"></script>
+  <script src="customers.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

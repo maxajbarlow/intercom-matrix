@@ -602,6 +602,7 @@ function renderWho() {
     else { av.textContent = '◐'; av.className = 'profile-av'; }
   }
   renderProfileMenu();
+  renderScopeBadge();  // public/customers.js — "Viewing: FIA Race Control"
   applyTabAccess();   // role-gated tabs (Work order) follow the signed-in role
 }
 function renderProfileMenu() {
@@ -1368,6 +1369,7 @@ const SET_SECTIONS = [
   { key: 'display', icon: '◐', label: 'Display', sub: 'Defaults & theme' },
   { key: 'safety', icon: '⌁', label: 'Safety', sub: 'RRCS · login' },
   { key: 'users', icon: '⚇', label: 'Users', sub: 'Accounts & SSO' },
+  { key: 'customers', icon: '◎', label: 'Customers', sub: 'Scoped channel views' },
 ];
 
 // Local accounts for the Users section (admin-only endpoint; tolerate 403/anon).
@@ -1413,6 +1415,7 @@ function renderSettings() {
       <span class="setnav-tx"><b>${esc(x.label)}</b><span>${esc(x.sub)}</span></span>
       ${x.key === 'systems' ? `<span class="setnav-badge">${sysList.length}</span>` : ''}
       ${x.key === 'users' && state.users ? `<span class="setnav-badge">${state.users.length}</span>` : ''}
+      ${x.key === 'customers' && state.cust && state.cust.list ? `<span class="setnav-badge">${state.cust.list.length}</span>` : ''}
     </button>`).join('');
 
   const panels = {
@@ -1421,6 +1424,7 @@ function renderSettings() {
     display: secDisplay(s, eng, dis),
     safety: secSafety(s, eng, dis),
     users: secUsers(s, eng, dis),
+    customers: secCustomers(eng),   // public/customers.js
   };
   if (sec === 'users' && eng && state.users === null) loadUsers().then(renderSettings);  // lazy-load accounts
 
@@ -1633,6 +1637,7 @@ function secSafety(s, eng, dis) {
         ${tgl('stRrcs', s.safety.rrcsEnabled, 'RRCS live polling', 'Off = print / offline only — no network calls', dis)}
         ${tgl('stRequireLogin', s.safety.requireLogin, 'Require login', 'When on, nobody sees data without signing in. Off = anonymous read-only.', dis)}
       </div>
+      ${!s.safety.requireLogin && state.auth && state.auth.requireLogin ? '<p class="sec-note">🔒 Login is currently <b>enforced anyway</b> because customer groups exist — an anonymous viewer can’t be scoped to a customer.</p>' : ''}
       <label class="fl fl-narrow"><span>Minimum refresh interval (seconds)</span><input id="stMinRefresh" type="number" min="3" max="3600" value="${esc(s.safety.minRefreshSec)}"${dis} /></label>
       <p class="sec-note">⚠ Lowering the interval increases controller load. RRCS is hard-locked to read-only <code>Get*</code> calls regardless of this toggle.</p>
       ${eng ? `<div class="sec-subaction"><button class="btn" data-act="rerun-setup">↻ Re-run setup wizard</button><span class="sec-note" style="margin:0">Replay the guided first-run walkthrough (won’t delete anything).</span></div>` : ''}
@@ -1811,6 +1816,7 @@ function sysDetailValues() {
 async function settingsAction(act, ctx) {
   const W = els.settingsWrap;
   try {
+    if (act.startsWith('cust-')) { await customersAction(act, ctx); return; }   // public/customers.js
     if (act === 'open-who') { openAuthModal(false); return; }
     if (act === 'rerun-setup') { if (window.Onboarding) window.Onboarding.startManual(); return; }
     if (act === 'export-xlsx') { exportXlsx(ctx); return; }

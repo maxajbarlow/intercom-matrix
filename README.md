@@ -375,6 +375,33 @@ cookie to a verified user, so the UI only mirrors what the server already
 enforces. (The old self-claimed `X-Imx-*` header is gone; you can no longer pick
 your own role.)
 
+### Customer groups (scoped channel views)
+
+Show each customer only the channels that matter to them. In **Settings →
+Customers**, an admin creates a group (e.g. *FIA Race Control*, *SysOps*) and
+ticks the **source panels** that customer owns, per system. Those panels are the
+source of truth:
+
+- The group sees **every conference hosted on its source panels**, whether the
+  panel is a member or holds a key to it. The live *Resolves to* preview shows
+  exactly which ones.
+- Nothing is stored as a conference list. The set is worked out from the current
+  data on every request, so **a conference added to an FIA panel appears for FIA
+  with the next print or refresh**, with no one editing the group.
+- Matrix rows are everyone on those conferences, but each panel's memberships
+  are cut to the group's conferences. A shared panel never reveals the rest.
+- Members are local **usernames** and/or **LDAP/SAML directory groups** (DN or
+  group claim). A directory group mapped to a customer also lets its members
+  sign in as viewers.
+
+Rules: only **viewers** are scoped. Admins and editors always see everything.
+Once any group exists, **login is enforced** (an anonymous visitor can't be
+scoped), and a viewer in no group sees no data. Scoping is enforced
+**server-side** on every data route, the Excel export, print diffs and change
+requests. Customers can only raise requests on their own channels, and only see
+requests about them. The logic is in `lib/customer-scope.js` (pure derivation)
+and `lib/customer-access.js` (applied per request).
+
 ## Key-access (optional)
 
 Conference *membership* is permanent and authoritative. Some panels also reach
@@ -441,7 +468,7 @@ change-request endpoints write only to the local request DB — never to RRCS.
 | `GET /api/panels` | panels with their conference memberships |
 | `GET /api/export.xlsx` | the current snapshot as a 3-sheet Excel workbook (Matrix / Conferences / Panels) |
 | `POST /api/refresh` | re-pull from RRCS for a system |
-| `POST /api/system-config` | point a system at a controller (persisted) |
+| `POST /api/system-config` | point a system at a controller (persisted; admin) |
 | `POST /api/config-file` | load a `.Art`/`.ash` for key-access |
 | `GET /api/requests` | change requests + status counts |
 | `POST /api/requests` | create a request (membership change or new conference) |
@@ -452,6 +479,12 @@ change-request endpoints write only to the local request DB — never to RRCS.
 | `GET /api/work-order` | pending changes grouped by conference for the engineer |
 | `POST /api/requests-reconcile` | reconcile open requests against the current print |
 | `POST /api/requests-backup` | write a timestamped copy of the request DB |
+| `GET /api/customers` | customer groups with source panels + members (admin) |
+| `POST /api/customers` · `PATCH`/`DELETE /api/customers/:id` | manage customer groups (admin) |
+| `POST /api/customers/preview` | dry-run: which conferences a set of source panels resolves to (admin) |
+
+For a customer-scoped viewer, every data endpoint above returns only their
+channels (see *Customer groups*).
 
 ## What it is (and isn't)
 
