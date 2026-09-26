@@ -42,9 +42,9 @@ const withCookie = (cookie) => ({ ...J, Cookie: cookie });
 let adminCookie;
 
 before(async () => {
-  fs.writeFileSync(SYSTEMS_FILE, JSON.stringify([{ id: 'f1', name: 'Studio A', host: '', port: 8193 }], null, 2));
+  fs.writeFileSync(SYSTEMS_FILE, JSON.stringify([{ id: 'f1', name: 'Studio A' }], null, 2));
   child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-    env: { ...process.env, PORT: String(PORT), SYSTEMS_FILE, SETTINGS_FILE, AUTH_DB, AUTH_CONFIG_FILE, SECRET_KEY_FILE, RRCS_ENABLED: 'off', NODE_ENV: 'test', LOCAL_ADMIN_USER: 'root', LOCAL_ADMIN_PASS: 'rootpass' },
+    env: { ...process.env, PORT: String(PORT), SYSTEMS_FILE, SETTINGS_FILE, AUTH_DB, AUTH_CONFIG_FILE, SECRET_KEY_FILE, NODE_ENV: 'test', LOCAL_ADMIN_USER: 'root', LOCAL_ADMIN_PASS: 'rootpass' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   await waitForReady(child);
@@ -119,10 +119,9 @@ test('system CRUD is admin-gated and round-trips', async () => {
   assert.deepEqual(ids, ['f1']);
 });
 
-test('source uploads (print/config/topology) are gated to editor/admin', async () => {
+test('source uploads (print/topology) are gated to editor/admin', async () => {
   // anonymous is denied
   assert.equal((await fetch(`${BASE}/api/print-file?system=f1&name=x.txt`, { method: 'POST', body: 'x' })).status, 403);
-  assert.equal((await fetch(`${BASE}/api/config-file?system=f1`, { method: 'POST', body: 'x' })).status, 403);
   assert.equal((await fetch(`${BASE}/api/topology-file?system=f1`, { method: 'POST', body: 'x' })).status, 403);
   // reads stay open
   assert.equal((await fetch(`${BASE}/api/print-file?system=f1`)).status, 200);

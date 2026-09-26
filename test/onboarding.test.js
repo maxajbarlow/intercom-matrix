@@ -2,7 +2,7 @@
 // Integration tests for the first-run onboarding flow. Boots real servers on
 // ephemeral ports against ISOLATED temp config/db files and drives them over
 // HTTP — proving the bootstrap-locked admin creator, the onboarding status
-// transitions (admin → system, via either a live host or an uploaded print),
+// transitions (admin → system, via an uploaded config print),
 // the boot auto-stamp for already-configured deployments, and the
 // ONBOARDING_OPEN kill-switch.
 
@@ -31,7 +31,13 @@ function spawnServer(extraEnv) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'imx-ob-'));
   const PORT = portSeq++;
   const systemsFile = path.join(tmpDir, 'systems.json');
-  fs.writeFileSync(systemsFile, JSON.stringify(extraEnv._systems || [], null, 2));
+  let defs = extraEnv._systems || [];
+  if (extraEnv._seedPrint) {   // point the first system at a seed print (imported as v1 at boot)
+    const seed = path.join(tmpDir, 'seed.txt');
+    fs.writeFileSync(seed, PRINT_TXT);
+    defs = defs.map((d, i) => (i === 0 ? { ...d, print: seed } : d));
+  }
+  fs.writeFileSync(systemsFile, JSON.stringify(defs, null, 2));
   const env = {
     ...process.env,
     PORT: String(PORT),
@@ -44,8 +50,8 @@ function spawnServer(extraEnv) {
     REQUESTS_DIR: tmpDir,
     NODE_ENV: 'test',
   };
-  // Strip inherited bootstrap-admin / RRCS env unless the case sets them.
-  delete env.LOCAL_ADMIN_USER; delete env.LOCAL_ADMIN_PASS; delete env.RRCS_ENABLED; delete env.ONBOARDING_OPEN;
+  // Strip inherited bootstrap-admin env unless the case sets them.
+  delete env.LOCAL_ADMIN_USER; delete env.LOCAL_ADMIN_PASS; delete env.ONBOARDING_OPEN;
   for (const [k, v] of Object.entries(extraEnv)) { if (!k.startsWith('_')) env[k] = v; }
 
   const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -106,7 +112,6 @@ test('the open admin creator self-locks once an admin exists', async () => {
 });
 
 test('print upload (no host) makes a system configured', async () => {
-  // Create an offline system (RRCS stays off — the zero-config default).
   const c = await fetch(`${A.base}/api/systems`, { method: 'POST', headers: withCookie(adminCookie), body: JSON.stringify({ id: 'f1', name: 'Studio A' }) });
   assert.equal(c.status, 201);
   let st = await (await fetch(`${A.base}/api/onboarding`)).json();
@@ -121,14 +126,6 @@ test('print upload (no host) makes a system configured', async () => {
   assert.equal(st.steps.system, true);    // a print counts as configured
 });
 
-test('RRCS branch: setting a host + enabling polling configures a system', async () => {
-  await fetch(`${A.base}/api/systems`, { method: 'POST', headers: withCookie(adminCookie), body: JSON.stringify({ id: 'f2', name: 'F2', host: '10.9.9.9' }) });
-  await fetch(`${A.base}/api/settings`, { method: 'PATCH', headers: withCookie(adminCookie), body: JSON.stringify({ safety: { rrcsEnabled: true } }) });
-  const sys = await (await fetch(`${A.base}/api/systems`)).json();
-  const f2 = sys.systems.find((s) => s.id === 'f2');
-  assert.equal(f2.configured, true);      // configured = rrcsOn && host (reachability not required)
-});
-
 test('completing setup stamps onboardedAt and deactivates the wizard', async () => {
   const done = await fetch(`${A.base}/api/settings`, { method: 'PATCH', headers: withCookie(adminCookie), body: JSON.stringify({ meta: { onboardedAt: new Date().toISOString() } }) });
   assert.equal(done.status, 200);
@@ -139,7 +136,7 @@ test('completing setup stamps onboardedAt and deactivates the wizard', async () 
 
 // ---- Case B: already-configured deployment is auto-stamped at boot ----------
 test('a pre-configured deployment never activates the wizard', async () => {
-  const B = spawnServer({ _systems: [{ id: 'f1', name: 'Studio A', host: '10.0.0.5', port: 8193 }], RRCS_ENABLED: 'on' });
+  const B = spawnServer({ _systems: [{ id: 'f1', name: 'Studio A' }], _seedPrint: true });
   try {
     await B.ready;
     const st = await (await fetch(`${B.base}/api/onboarding`)).json();

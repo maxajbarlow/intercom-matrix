@@ -138,7 +138,7 @@ function custDetail(c) {
 function custPanelPicker(c) {
   const panels = c.panels[c.sys];
   if (!panels) return '<div class="sec-empty">Loading panels…</div>';
-  if (!panels.length) return '<div class="sec-empty">This system has no panel data yet — load a config print or connect RRCS first.</div>';
+  if (!panels.length) return '<div class="sec-empty">This system has no panel data yet — upload a config print first.</div>';
   const d = c.draft;
   // Selected sources that no longer exist in the current data (renamed/removed).
   const present = new Set(panels.flatMap((p) => [p.addr, p.name]));

@@ -6,7 +6,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const { resolveScope, filterSnapshot, filterPrintDiff, requestVisible, assertItemsInScope } = require('../lib/customer-scope');
 
-// A tiny snapshot in the shape rrcs-service produces. Two customers share a
+// A tiny snapshot in the shape the snapshot builders produce. Two customers share a
 // system: FIA panels (RC-1, RC-2) and SysOps panels (SYS-1). "Shared Mon" is a
 // SysOps conference that RC-2 merely has a KEY to.
 function snap() {
@@ -27,7 +27,7 @@ function snap() {
   ];
   const mem = (addr, name) => ({ addr, name, type: 'DCP', talk: true, listen: true });
   return {
-    ok: true, source: 'rrcs', system: { id: 'f1', name: 'F1' },
+    ok: true, source: 'print', system: { id: 'f1', name: 'F1' },
     counts: { ports: 4, panels: 4, conferences: 4, groups: 1, memberEdges: 7, keyEdges: 1, keyUnresolved: 0, cells: 8 },
     topology: { loaded: true, nodes: [{ id: '1', name: 'N1', cards: [] }, { id: '2', name: 'N2', cards: [] }] },
     conferences: [

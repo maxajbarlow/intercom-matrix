@@ -26,7 +26,7 @@
     <div class="brand">
       <span class="dot"></span>
       <h1>Intercom Matrix</h1>
-      <span class="sub" id="subtitle">Live intercom matrix</span>
+      <span class="sub" id="subtitle">Intercom matrix</span>
     </div>
 
     <nav class="tabs" id="tabs">
@@ -42,17 +42,6 @@
         <span>System</span>
         <select id="systemSelect"></select>
       </label>
-      <label class="auto">
-        <span>Auto</span>
-        <select id="autoSelect">
-          <option value="0">Off</option>
-          <option value="10">10s</option>
-          <option value="30" selected>30s</option>
-          <option value="60">1m</option>
-          <option value="300">5m</option>
-        </select>
-      </label>
-      <button class="btn primary" id="refreshBtn">Refresh</button>
       <span class="scope-badge hidden" id="scopeBadge" role="status"></span>
       <div class="profile" id="profile">
         <button class="profile-btn" id="profileBtn" title="Account" aria-haspopup="menu" aria-expanded="false">
@@ -64,7 +53,7 @@
   </header>
 
   <div class="statusbar" id="statusbar">
-    <span id="statusText">Connecting…</span>
+    <span id="statusText">Loading…</span>
     <span class="spacer"></span>
     <span id="countText"></span>
     <span id="updatedText"></span>
@@ -79,13 +68,11 @@
         <select id="mxNode" class="topo-sel" title="filter rows by node" hidden></select>
         <select id="mxCard" class="topo-sel" title="filter rows by card/bay" hidden></select>
         <label class="chk"><input type="checkbox" id="mxPanelsOnly" /> panels only</label>
-        <label class="chk"><input type="checkbox" id="mxKeyAccess" checked /> show key-access</label>
         <label class="chk"><input type="checkbox" id="mxPending" /> pending changes</label>
         <span class="legend">
           <span class="lg talk">Talk</span>
           <span class="lg listen">Listen</span>
           <span class="lg both">Both</span>
-          <span class="lg key">Via key</span>
           <span class="lg padd">+ pending</span>
           <span class="lg prem">− pending</span>
         </span>
@@ -164,7 +151,6 @@
     <section class="view hidden" id="view-settings">
       <!-- persistent hidden file inputs (the Sources section panel re-renders) -->
       <input type="file" id="logoFile" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif" hidden />
-      <input type="file" id="cfgFile" accept=".art,.Art,.ash" hidden />
       <input type="file" id="topoFile" accept=".txt,.log,.tree" hidden />
       <input type="file" id="printFile" accept=".pdf,.txt" hidden />
       <div class="settings-wrap" id="settingsWrap"></div>

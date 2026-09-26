@@ -46,8 +46,6 @@ services:
       - REQUESTS_DIR=/data
       - SYSTEMS_FILE=/config/systems.json
       - SETTINGS_FILE=/config/settings.json
-      # Live RRCS polling is off until systems.json has reachable hosts:
-      # - RRCS_ENABLED=on
     env_file:
       # Admin credentials + optional IMX_SECRET_KEY — kept out of git.
       - .env

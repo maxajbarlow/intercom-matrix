@@ -1,7 +1,7 @@
 {
   "name": "intercom-matrix",
   "version": "1.1.0",
-  "description": "Live intercom matrix viewer — read-only via RRCS. Hostable, multi-client, auto-refreshing.",
+  "description": "Intercom matrix viewer fed by config prints. Hostable, multi-client, with change requests and customer-scoped views.",
   "main": "server.js",
   "license": "MIT",
   "engines": {
@@ -16,7 +16,6 @@
     "exceljs": "^4.4.0",
     "express": "^4.21.0",
     "express-rate-limit": "^8.5.2",
-    "ldapts": "^8.1.8",
-    "ws": "^8.21.0"
+    "ldapts": "^8.1.8"
   }
 }

@@ -20,8 +20,6 @@ test('defaults are well-formed when no file exists', () => {
   const s = settings.getSettings();
   assert.equal(s.branding.siteName, 'Intercom Matrix');
   assert.equal(s.display.theme, 'dark');
-  assert.equal(s.display.autoRefreshSec, 30);
-  assert.equal(s.safety.minRefreshSec, 3);
   assert.equal(s.safety.requireLogin, false);
 });
 
@@ -57,20 +55,10 @@ test('updateSettings merges a partial patch and persists', () => {
   assert.equal(onDisk.branding.siteName, 'Acme');
 });
 
-test('minRefreshSec is clamped to the 3s floor', () => {
-  assert.equal(settings.updateSettings({ safety: { minRefreshSec: 1 } }).safety.minRefreshSec, 3);
-  assert.equal(settings.updateSettings({ safety: { minRefreshSec: 9000 } }).safety.minRefreshSec, 3600);
-});
-
 test('invalid enums fall back to defaults', () => {
-  const s = settings.updateSettings({ display: { theme: 'neon', autoRefreshSec: 7, dateFormat: 'epoch' } });
+  const s = settings.updateSettings({ display: { theme: 'neon', dateFormat: 'epoch' } });
   assert.equal(s.display.theme, 'dark');
-  assert.equal(s.display.autoRefreshSec, 30);
   assert.equal(s.display.dateFormat, 'medium');
-});
-
-test('a valid auto-refresh choice is accepted', () => {
-  assert.equal(settings.updateSettings({ display: { autoRefreshSec: 60 } }).display.autoRefreshSec, 60);
 });
 
 test('a non-image logo data-URI is rejected', () => {
