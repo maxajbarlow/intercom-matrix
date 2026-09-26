@@ -11,9 +11,13 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends poppler-utils \
  && rm -rf /var/lib/apt/lists/*
 
+# Everything uploaded or written at runtime lives under the /data volume so it
+# survives container replacement (Watchtower redeploys): request/auth DBs AND the
+# uploaded config prints + topology (PRINTS_DIR). Keep new runtime state here too.
 ENV NODE_ENV=production \
     PORT=8080 \
-    REQUESTS_DIR=/data
+    REQUESTS_DIR=/data \
+    PRINTS_DIR=/data/prints
 
 WORKDIR /app
 
@@ -25,7 +29,7 @@ RUN npm ci --omit=dev
 # systems.json (controller IPs) is mounted at runtime, never baked in.
 COPY . .
 
-# Request DB lives on a volume so it survives container replacement.
+# Request DB + uploads live on a volume so they survive container replacement.
 RUN mkdir -p /data && chown -R node:node /data /app
 VOLUME /data
 

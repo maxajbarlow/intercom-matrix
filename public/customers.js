@@ -24,6 +24,8 @@ function custState() {
 }
 const current = () => { const c = custState(); return (c.list || []).find((x) => x.id === c.sel) || null; };
 const directoryOn = () => !!(state.auth && (state.auth.ldapEnabled || state.auth.samlEnabled));
+// Eye: "view as" (preview what a viewer / group sees).
+const VIEW_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="2"/></svg>';
 // Directory-group avatar: two heads (inherits the avatar's colour).
 const GROUP_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="6" cy="5.5" r="2.3"/><path d="M1.8 13c.5-2.3 2.2-3.5 4.2-3.5s3.7 1.2 4.2 3.5"/><path d="M10.5 3.4a2.3 2.3 0 0 1 0 4.4M12 9.8c1.2.5 2 1.6 2.3 3.2"/></svg>';
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
@@ -76,6 +78,7 @@ function custShell(cust) {
         <input id="cuDesc" class="cu-desc" value="${esc(cust.description)}" placeholder="Add a description" aria-label="Description" autocomplete="off" />
       </div>
       <div class="cu-status" id="cuStatus" role="status" aria-live="polite"></div>
+      <button class="btn small cu-view" data-act="cust-viewas-group" title="See exactly what this group's viewers see">${VIEW_ICON}Preview</button>
       <button class="btn small danger" data-act="cust-del">Delete</button>
     </header>
     <div class="cu-cols">
@@ -187,6 +190,7 @@ function paintMembers() {
   list.innerHTML = rows.length ? rows.map((m) => `
     <li class="cu-m${m.unscoped ? ' unscoped' : ''}">${icon(m)}
       <span class="cu-p-tx"><b title="${esc(m.label)}">${esc(m.label)}</b><span>${sub(m)}</span></span>
+      ${m.kind !== 'group' && !m.unscoped ? `<button class="cu-x cu-eye" data-act="cust-viewas-user" data-user="${esc(m.value)}" aria-label="View as ${esc(m.label)}" title="View as ${esc(m.label)}">${VIEW_ICON}</button>` : ''}
       <button class="cu-x" data-act="cust-mrm" data-kind="${m.kind}" data-val="${esc(m.value)}" aria-label="Remove ${esc(m.label)}" title="Remove">×</button>
     </li>`).join('') : '<li class="cu-empty">No members yet.</li>';
   if (rows.some((m) => m.kind === 'group')) list.insertAdjacentHTML('beforeend', '<li class="cu-note">Directory groups also let all their members sign in as viewers.</li>');
@@ -306,6 +310,8 @@ function selectCustomer(id) {
 // ---------- actions (delegated from app.js settingsAction) ----------
 async function customersAction(act, el) {
   const c = custState();
+  if (act === 'cust-viewas-user') { startViewAs({ username: el.dataset.user }); return; }
+  if (act === 'cust-viewas-group') { if (current()) startViewAs({ customerId: current().id }); return; }
   if (act === 'cust-select') { selectCustomer(Number(el.dataset.cust)); return; }
   if (act === 'cust-new') { c.adding = true; renderSettings(); document.getElementById('cuNew').focus(); return; }
   const cust = current(); if (!cust) return;
@@ -455,10 +461,41 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// ---------- "view as" preview (lib/view-as) ----------
+// The server holds the target on the admin's session; a full reload then renders
+// the app exactly as that viewer gets it. Exit returns to where the preview started.
+const VIEW_AS_RETURN_KEY = 'imx.viewAsReturn';
+function reloadAt(hash) { history.replaceState(null, '', location.pathname + location.search + hash); location.reload(); }
+
+async function startViewAs(target) {
+  try { await apiWrite('/api/view-as', 'POST', target); }
+  catch (e) { setMsg(e.message, false); return; }
+  try { sessionStorage.setItem(VIEW_AS_RETURN_KEY, location.hash || ''); } catch { /* storage blocked: exit lands on Customers */ }
+  reloadAt('');
+}
+async function exitViewAs() {
+  try { await apiWrite('/api/view-as', 'DELETE'); } catch { /* reload re-reads the session either way */ }
+  let back = '#settings/customers';
+  try { back = sessionStorage.getItem(VIEW_AS_RETURN_KEY) || back; sessionStorage.removeItem(VIEW_AS_RETURN_KEY); } catch { /* default */ }
+  reloadAt(back);
+}
+
+function renderViewAsBar() {
+  const bar = document.getElementById('viewAsBar'); if (!bar) return;
+  const v = state.auth && state.auth.viewAs;
+  bar.hidden = !v;
+  if (!v) { bar.textContent = ''; return; }
+  const who = v.kind === 'group' ? `the <b>${esc(v.label)}</b> group` : `<b>${esc(v.label)}</b>`;
+  bar.innerHTML = `${VIEW_ICON}<span class="viewas-tx">Viewing as ${who}</span><span class="viewas-ro">Read-only preview</span>
+    <button class="viewas-exit" data-viewas-exit>Exit preview</button>`;
+}
+document.addEventListener('click', (e) => { if (e.target.closest && e.target.closest('[data-viewas-exit]')) exitViewAs(); });
+
 // ---------- scoped-viewer badge (header) ----------
 // Shown to a viewer confined to customer group(s), so it's obvious the matrix is
 // a filtered view rather than the whole system.
 function renderScopeBadge() {
+  renderViewAsBar();
   const host = document.getElementById('scopeBadge'); if (!host) return;
   const list = state.auth && Array.isArray(state.auth.customers) ? state.auth.customers : null;
   if (!list) { host.classList.add('hidden'); host.textContent = ''; return; }

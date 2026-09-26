@@ -1755,6 +1755,7 @@ function secUsers(s, eng, dis) {
         <span class="person-av role-${esc(u.role)}">${esc(initial(u.display_name || u.username))}</span>
         <span class="usr-id"><b>${esc(u.display_name || u.username)}</b><span class="muted">${esc(u.username)}${u.disabled_at ? ' · disabled' : ''}</span></span>
         <select class="usr-role" data-act="user-role" title="Role">${setOpt(SET_ROLES, u.role)}</select>
+        ${u.role === 'viewer' ? `<button class="iconbtn" data-act="cust-viewas-user" data-user="${esc(u.username)}" title="View as ${esc(u.display_name || u.username)}" aria-label="View as ${esc(u.display_name || u.username)}">${VIEW_ICON}</button>` : '<span class="iconbtn usr-nopreview" aria-hidden="true"></span>'}
         <button class="iconbtn" data-act="user-toggle" data-disabled="${u.disabled_at ? 'true' : 'false'}" title="${u.disabled_at ? 'Enable' : 'Disable'}">${u.disabled_at ? '○' : '⏸'}</button>
         <button class="iconbtn danger" data-act="user-del" title="Remove">✕</button>
       </div>`).join('') || '<div class="sec-empty">No local accounts yet — add one below.</div>';
@@ -1796,7 +1797,7 @@ async function settingsAction(act, ctx) {
     if (act === 'src-print-pick') { els.printFile.click(); return; }
     if (act === 'src-topo-pick') { els.topoFile.click(); return; }
     if (act === 'src-print-clear') { if (confirm('Clear the config print source for this system?')) await clearPrintFile(); return; }
-    if (act === 'src-topo-clear') { await clearTopologyFile(); return; }
+    if (act === 'src-topo-clear') { if (confirm('Clear the topology for this system?')) await clearTopologyFile(); return; }
     if (act === 'logo-pick') { els.logoFile.click(); return; }
     if (act === 'logo-clear') { logoDraft = ''; renderSettings(); return; }
 
