@@ -85,6 +85,7 @@ test('combine: panel memberships use the merged name and keep the real one', () 
   const f2 = s.panels.find((p) => p.name === 'F2-RC');
   const m = f2.memberships.find((x) => x.name === 'Race Control');
   assert.equal(m.realName, 'IM-Race Control');
+  assert.equal(s.matrix.cols[m.col].name, 'Race Control', 'links by column index, not name');
   assert.equal(f2.system, 'f2f3');
   assert.equal(f2.addr, s.matrix.rows.find((r) => r.name === 'F2-RC').addr);
 });
