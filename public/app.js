@@ -1796,7 +1796,7 @@ async function settingsAction(act, ctx) {
     if (act === 'src-print-pick') { els.printFile.click(); return; }
     if (act === 'src-topo-pick') { els.topoFile.click(); return; }
     if (act === 'src-print-clear') { if (confirm('Clear the config print source for this system?')) await clearPrintFile(); return; }
-    if (act === 'src-topo-clear') { await clearTopologyFile(); return; }
+    if (act === 'src-topo-clear') { if (confirm('Clear the topology for this system?')) await clearTopologyFile(); return; }
     if (act === 'logo-pick') { els.logoFile.click(); return; }
     if (act === 'logo-clear') { logoDraft = ''; renderSettings(); return; }
 

@@ -37,13 +37,15 @@ services:
     container_name: intercom-matrix
     restart: always
     volumes:
-      # Request / auth / vault databases (REQUESTS_DIR below points here).
+      # Request / auth / vault databases AND uploaded prints + topology
+      # (REQUESTS_DIR + PRINTS_DIR below point here) — survives redeploys.
       - /root/containers/intercom-matrix/data:/data
       # Writable config: systems.json (controller IPs) + settings.json (branding).
       - /root/containers/intercom-matrix/config:/config
     environment:
       - PORT=80
       - REQUESTS_DIR=/data
+      - PRINTS_DIR=/data/prints
       - SYSTEMS_FILE=/config/systems.json
       - SETTINGS_FILE=/config/settings.json
     env_file:

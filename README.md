@@ -180,7 +180,7 @@ dropped the next time the file is saved.
 | `SYSTEMS_FILE` | `./systems.json` | path to the systems definition |
 | `SETTINGS_FILE` | `./settings.json` | path to the deployment settings (see below) |
 | `ONBOARDING_OPEN` | `on` | allow the first-run wizard to create the first admin without auth (locks once one exists). Set `0` to require the env bootstrap admin instead |
-| `PRINTS_DIR` | `./prints` | where uploaded config prints are versioned (gitignored) |
+| `PRINTS_DIR` | `./prints` (`/data/prints` in Docker) | where uploaded config prints (versioned) and topology trees are kept until replaced or cleared — removing a system keeps them (gitignored) |
 
 See [`.env.example`](.env.example) for the full list, including the
 authentication and cookie variables.
@@ -197,7 +197,8 @@ docker run -d --name intercom-matrix -p 8080:8080 \
 ```
 
 Then open **http://localhost:8080** — the first-run wizard does the rest. The
-`intercom-data` volume keeps the request and login databases across restarts.
+`intercom-data` volume keeps the request and login databases **and every uploaded
+print and topology** across restarts and image updates.
 
 **No Docker yet?** Install it once, then run the command above:
 
@@ -406,7 +407,8 @@ system to group and filter the views by node and card. It's joined to the
 print's panels by name (and fills in panel names the print truncated). Once
 loaded, the **Matrix** and **Panels** views gain **Node** and **Card/Bay**
 dropdowns. Load it via the topology **Upload** button in Settings → Systems, or
-set a `topology` path in `systems.json`. See `topology/README.md`. (Trees hold
+set a `topology` path in `systems.json`. An upload is kept across restarts and
+wins over the configured path until it's replaced or cleared. See `topology/README.md`. (Trees hold
 the full port inventory and are not committed.)
 
 ## Updating the data
