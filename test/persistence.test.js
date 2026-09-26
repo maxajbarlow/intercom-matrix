@@ -100,6 +100,16 @@ test('a newer upload replaces the stored data', async () => {
   assert.equal((await getJson('/api/print-versions?system=f1')).versions.length, 2, 'print history kept');
 });
 
+test('saving a system (e.g. a rename) keeps its uploaded topology and print', async () => {
+  // the Systems form always sends its (empty) topology-path field along
+  const r = await fetch(`${BASE}/api/systems/f1`, { method: 'PATCH', headers: { ...J, Cookie: admin }, body: JSON.stringify({ name: 'Formula 1', topology: '' }) });
+  assert.equal(r.status, 200);
+  assert.equal((await topo('f1')).ports, 3);
+  await restart();
+  assert.equal((await topo('f1')).ports, 3);
+  assert.deepStrictEqual(await confs('f1'), ['Stewards']);
+});
+
 test('clearing deletes the stored data for good', async () => {
   assert.equal((await del('/api/topology-file?system=f1')).status, 200);
   await restart();
