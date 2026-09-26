@@ -122,9 +122,18 @@ test('FIA sees only the conferences hosted on its panels', async () => {
   assert.deepStrictEqual(s.matrix.cols.map((c) => c.name).sort(), ['RaceControl', 'SharedMon', 'Stewards']);
   assert.equal(s.counts.conferences, 3);
   assert.deepStrictEqual(s.scope.customers, ['FIA Race Control']);
-  // SYS-1 is a participant (on SharedMon) but its SysOps membership is hidden
-  const sys = s.panels.find((p) => p.name === 'SYS-1');
-  assert.deepStrictEqual(sys.memberships.map((m) => m.name), ['SharedMon']);
+  // only FIA's own ports — not Guest or SYS-1, though they share FIA's conferences
+  assert.deepStrictEqual(s.panels.map((p) => p.name).sort(), ['RC-1', 'RC-2']);
+  assert.deepStrictEqual(s.matrix.rows.map((r) => r.name).sort(), ['RC-1', 'RC-2']);
+  const rc = s.conferences.find((c) => c.name === 'RaceControl');
+  assert.deepStrictEqual(rc.members.map((m) => m.name).sort(), ['RC-1', 'RC-2']);
+});
+
+test('no data route names another customer\'s port', async () => {
+  for (const p of ['/api/snapshot', '/api/matrix', '/api/conferences', '/api/panels']) {
+    const body = await (await get(p + '?system=f1', fia)).text();
+    assert.ok(!body.includes('"Guest"') && !body.includes('"SYS-1"'), `${p} leaked another customer's port`);
+  }
 });
 
 test('no data route leaks an out-of-scope conference', async () => {
