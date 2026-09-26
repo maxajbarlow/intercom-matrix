@@ -58,11 +58,10 @@ test('resolveScope: conferences come from source panels, including key access', 
   assert.ok(!s.confNames.has('SysOps'));
 });
 
-test('resolveScope: visible panels are ONLY the group\'s own source panels', () => {
+test('resolveScope: visible panels are every participant of the visible conferences', () => {
   const s = resolveScope(snap(), FIA);
-  // Guest (on Race Control) and SYS-1 (on Shared Mon) share conferences but aren't FIA's
-  assert.deepStrictEqual([...s.panelAddrs].sort(), ['1.1.1', '1.1.2']);
-  assert.ok(!s.panelKeys.has('Guest') && !s.panelKeys.has('SYS-1'));
+  // Guest is on Race Control; SYS-1 is on Shared Mon — both participants
+  assert.deepStrictEqual([...s.panelAddrs].sort(), ['1.1.1', '1.1.2', '1.2.1', '1.3.1']);
 });
 
 test('resolveScope: matches by address first, falls back to name (renamed panel still resolves)', () => {
@@ -95,15 +94,16 @@ test('filterSnapshot: keeps only in-scope columns, rows and remapped cells', () 
   const src = snap();
   const out = filterSnapshot(src, resolveScope(src, FIA));
   assert.deepStrictEqual(out.matrix.cols.map((c) => c.name), ['Race Control', 'Stewards', 'Shared Mon']);
-  assert.deepStrictEqual(out.matrix.rows.map((r) => r.name), ['RC-1', 'RC-2'], 'no other customer\'s ports');
+  assert.deepStrictEqual(out.matrix.rows.map((r) => r.name), ['RC-1', 'RC-2', 'SYS-1', 'Guest']);
   // every cell points inside the new bounds
   for (const c of out.matrix.cells) {
     assert.ok(c.r >= 0 && c.r < out.matrix.rows.length);
     assert.ok(c.c >= 0 && c.c < out.matrix.cols.length);
   }
-  assert.equal(out.matrix.cells.length, 4, 'RC-1 ×2, RC-2 ×2 (incl. its Shared Mon key)');
-  // column member counts only count the customer's own panels (RC-2 only holds a KEY to Shared Mon)
-  assert.deepStrictEqual(out.matrix.cols.map((c) => c.memberCount), [2, 1, 0]);
+  // SYS-1 keeps only its Shared Mon cell (its SysOps + All Call cells are dropped)
+  const sysRow = out.matrix.rows.findIndex((r) => r.name === 'SYS-1');
+  const sysCells = out.matrix.cells.filter((c) => c.r === sysRow).map((c) => out.matrix.cols[c.c].name);
+  assert.deepStrictEqual(sysCells, ['Shared Mon']);
 });
 
 test('filterSnapshot: conference/group lists, panel memberships and counts are scoped', () => {
@@ -113,15 +113,11 @@ test('filterSnapshot: conference/group lists, panel memberships and counts are s
   assert.deepStrictEqual(out.groups, []);
   // idx points at the conference's new column
   for (const c of out.conferences) assert.equal(out.matrix.cols[c.idx].name, c.name);
-  assert.deepStrictEqual(out.panels.map((p) => p.name), ['RC-1', 'RC-2']);
-  // member lists never name another customer's port
-  const rc = out.conferences.find((c) => c.name === 'Race Control');
-  assert.deepStrictEqual(rc.members.map((m) => m.name), ['RC-1', 'RC-2']);
-  assert.equal(rc.memberCount, 2);
-  assert.deepStrictEqual(out.conferences.find((c) => c.name === 'Shared Mon').members, []);
+  const sys = out.panels.find((p) => p.name === 'SYS-1');
+  assert.deepStrictEqual(sys.memberships.map((m) => m.name), ['Shared Mon']);
   assert.equal(out.counts.conferences, 3);
   assert.equal(out.counts.groups, 0);
-  assert.equal(out.counts.panels, 2);
+  assert.equal(out.counts.panels, 4);
   assert.equal(out.counts.cells, out.matrix.cells.length);
   assert.equal(out.counts.keyEdges, 1);
 });
@@ -145,23 +141,21 @@ test('filterSnapshot: an empty scope yields an empty (but well-formed) snapshot'
 test('filterSnapshot: topology nodes are limited to nodes with visible rows', () => {
   const src = snap();
   const out = filterSnapshot(src, resolveScope(src, [{ addr: '1.1.1', name: 'RC-1' }]));
-  // only RC-1's own node — not Guest's, though Guest shares Race Control
+  // RC-1 → Race Control + Stewards → participants on nodes 1 and 3 only
   assert.deepStrictEqual(out.topology.nodes.map((n) => n.id), ['1']);
 });
 
-test('filterPrintDiff: only in-scope conferences and the customer\'s own panels, summary recomputed', () => {
+test('filterPrintDiff: only conferences in scope, summary recomputed', () => {
   const diff = {
-    summary: { confAdded: 1, confRemoved: 0, membersAdded: 3, membersRemoved: 2, dirChanged: 0, changedConferences: 3 },
+    summary: { confAdded: 1, confRemoved: 0, membersAdded: 2, membersRemoved: 1, dirChanged: 0, changedConferences: 2 },
     conferences: [
-      { name: 'Race Control', status: 'changed', members: [{ panel: 'RC-1', status: 'added' }, { panel: 'Guest', status: 'removed' }] },
-      { name: 'Stewards', status: 'changed', members: [{ panel: 'Guest', status: 'added' }, { panel: 'Other', status: 'removed' }] },
+      { name: 'Race Control', status: 'changed', members: [{ panel: 'X', status: 'added' }, { panel: 'Y', status: 'removed' }] },
       { name: 'SysOps', status: 'added', members: [{ panel: 'SYS-1', status: 'added' }] },
     ],
   };
   const out = filterPrintDiff(diff, resolveScope(snap(), FIA));
-  assert.deepStrictEqual(out.conferences.map((c) => c.name), ['Race Control'], 'Stewards only changed other ports');
-  assert.deepStrictEqual(out.conferences[0].members.map((m) => m.panel), ['RC-1']);
-  assert.deepStrictEqual(out.summary, { confAdded: 0, confRemoved: 0, membersAdded: 1, membersRemoved: 0, dirChanged: 0, changedConferences: 1 });
+  assert.deepStrictEqual(out.conferences.map((c) => c.name), ['Race Control']);
+  assert.deepStrictEqual(out.summary, { confAdded: 0, confRemoved: 0, membersAdded: 1, membersRemoved: 1, dirChanged: 0, changedConferences: 1 });
 });
 
 test('requestVisible: own requests always; others only when every item is in scope', () => {
@@ -173,10 +167,6 @@ test('requestVisible: own requests always; others only when every item is in sco
   assert.ok(requestVisible(scope, 'fia1', inScope));
   const mixed = { requesterId: 'x', items: [{ type: 'add_member', conference_name: 'Race Control' }, { type: 'remove_member', conference_name: 'SysOps' }] };
   assert.ok(!requestVisible(scope, 'fia1', mixed));
-  const foreignPort = { requesterId: 'x', items: [{ type: 'remove_member', conference_name: 'Race Control', panel_addr: '1.3.1', panel_name: 'Guest' }] };
-  assert.ok(!requestVisible(scope, 'fia1', foreignPort), 'names a port that isn\'t theirs');
-  const ownPort = { requesterId: 'x', items: [{ type: 'remove_member', conference_name: 'Race Control', panel_addr: '1.1.2', panel_name: 'RC-2' }] };
-  assert.ok(requestVisible(scope, 'fia1', ownPort));
 });
 
 test('assertItemsInScope: rejects changes to out-of-scope conferences or panels', () => {
@@ -189,7 +179,6 @@ test('assertItemsInScope: rejects changes to out-of-scope conferences or panels'
   bad([{ type: 'remove_member', conference_name: 'SysOps', panel_addr: '1.2.1', panel_name: 'SYS-1' }]);
   bad([{ type: 'delete_conference', conference_name: 'SysOps' }]);
   bad([{ type: 'add_member', conference_name: 'Race Control', panel_addr: '5.5.5', panel_name: 'Elsewhere' }]);
-  bad([{ type: 'remove_member', conference_name: 'Race Control', panel_addr: '1.3.1', panel_name: 'Guest' }]);
 });
 
 test('assertItemsInScope: an empty scope may not even create a conference', () => {
