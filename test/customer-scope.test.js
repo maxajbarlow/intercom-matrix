@@ -185,3 +185,33 @@ test('assertItemsInScope: an empty scope may not even create a conference', () =
   const empty = resolveScope(snap(), []);
   assert.throws(() => assertItemsInScope(empty, [{ type: 'create_conference', conference_name: 'Spam', is_new_conference: true }]), /outside your customer group/);
 });
+
+// The rule in one picture: Panel A is FIA's and carries Conference 1. Panel B is
+// someone else's and carries Conference 1 AND Conference 2. FIA sees Panel B's
+// connection to Conference 1 (it's on FIA's channel) — but never Conference 2.
+test('a shared panel is shown only for the customer\'s conferences', () => {
+  const m = (name) => ({ name, label: '', kind: 'conference', access: 'member', talk: true, listen: true });
+  const A = { addr: 'A', name: 'Panel A', memberships: [m('Conference 1')] };
+  const B = { addr: 'B', name: 'Panel B', memberships: [m('Conference 1'), m('Conference 2')] };
+  const mem = (p) => ({ addr: p.addr, name: p.name, talk: true, listen: true });
+  const s = {
+    ok: true, counts: {}, panels: [A, B],
+    conferences: [
+      { idx: 0, kind: 'conference', name: 'Conference 1', memberCount: 2, members: [mem(A), mem(B)] },
+      { idx: 1, kind: 'conference', name: 'Conference 2', memberCount: 1, members: [mem(B)] },
+    ],
+    groups: [],
+    matrix: {
+      rows: [{ addr: 'A', name: 'Panel A' }, { addr: 'B', name: 'Panel B' }],
+      cols: [{ name: 'Conference 1', kind: 'conference' }, { name: 'Conference 2', kind: 'conference' }],
+      cells: [{ r: 0, c: 0, t: 1, l: 1, k: 0 }, { r: 1, c: 0, t: 1, l: 1, k: 0 }, { r: 1, c: 1, t: 1, l: 1, k: 0 }],
+    },
+  };
+  const out = filterSnapshot(s, resolveScope(s, [{ addr: 'A', name: 'Panel A' }]));
+  assert.deepStrictEqual(out.matrix.rows.map((r) => r.name), ['Panel A', 'Panel B'], 'Panel B is shown');
+  assert.deepStrictEqual(out.matrix.cols.map((c) => c.name), ['Conference 1'], 'Conference 2 is not');
+  assert.equal(out.matrix.cells.length, 2, 'A–1 and B–1 only');
+  assert.deepStrictEqual(out.panels.find((p) => p.name === 'Panel B').memberships.map((x) => x.name), ['Conference 1']);
+  assert.deepStrictEqual(out.conferences.map((c) => c.name), ['Conference 1']);
+  assert.ok(!JSON.stringify(out).includes('Conference 2'), 'Conference 2 appears nowhere');
+});
