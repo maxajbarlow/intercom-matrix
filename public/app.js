@@ -336,6 +336,40 @@ function showView(v) {
   document.querySelectorAll('.view').forEach((s) => s.classList.toggle('hidden', s.id !== 'view-' + v));
   render();
 }
+// ---------- routing: Settings is its own page at #settings/<section> ----------
+// The viewer and Settings share one document; the hash decides which is shown.
+// Entering Settings hides the viewer chrome (tabs, system picker, status bar)
+// and gives it a full-page layout; the browser Back button and deep links work.
+const SETTINGS_ROUTE = /^#settings(?:\/([\w-]+))?$/;
+let viewBeforeSettings = 'matrix';
+function settingsSectionFromHash() {
+  const m = SETTINGS_ROUTE.exec(location.hash);
+  if (!m) return null;
+  return SET_SECTIONS.some((x) => x.key === m[1]) ? m[1] : 'systems';
+}
+function applyRoute() {
+  const sec = settingsSectionFromHash();
+  if (sec) {
+    if (state.view !== 'settings') viewBeforeSettings = state.view;
+    else if (state.setSection !== sec) applySettings();   // switching section reverts an unsaved theme preview
+    state.setSection = sec;
+    document.body.classList.add('is-settings');
+    showView('settings');
+    const scroller = document.getElementById('view-settings'); if (scroller) scroller.scrollTop = 0;
+  } else if (state.view === 'settings') {
+    document.body.classList.remove('is-settings');
+    applySettings();   // restores the document title + any previewed theme
+    showView(viewBeforeSettings && viewBeforeSettings !== 'settings' ? viewBeforeSettings : 'matrix');
+  }
+}
+function openSettings(section) { location.hash = 'settings/' + (section || state.setSection || 'systems'); }
+function closeSettings() {
+  history.pushState(null, '', location.pathname + location.search);   // clean URL, still a Back step
+  applyRoute();
+}
+window.addEventListener('hashchange', applyRoute);
+window.addEventListener('popstate', applyRoute);
+
 // Show/hide tabs that require a role (called whenever auth state changes).
 function applyTabAccess() {
   const wo = document.querySelector('.tab[data-view="workorder"]');
@@ -1164,7 +1198,7 @@ document.getElementById('profileMenu').addEventListener('click', (e) => {
   const a = it.dataset.pact;
   if (a === 'signin' || a === 'account') openAuthModal(false);
   else if (a === 'logout') doLogout();
-  else if (a === 'settings') showView('settings');
+  else if (a === 'settings') openSettings();
 });
 document.addEventListener('click', (e) => { if (!e.target.closest('#profile')) toggleProfileMenu(false); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleProfileMenu(false); });
@@ -1246,7 +1280,7 @@ els.panelDetail.addEventListener('click', detailRequestClick);
 // --- settings wiring ---
 els.settingsWrap.addEventListener('click', (e) => {
   const nav = e.target.closest('[data-section]');
-  if (nav) { state.setSection = nav.dataset.section; applySettings(); renderSettings(); return; }  // applySettings reverts any unsaved theme preview
+  if (nav) return;   // section links are plain #settings/<key> anchors → applyRoute()  // applySettings reverts any unsaved theme preview
   const seg = e.target.closest('[data-theme-pick]');
   if (seg) { onThemePick(seg); return; }
   const b = e.target.closest('[data-act]'); if (!b) return;
@@ -1369,13 +1403,16 @@ function renderSettings() {
       : `<button class="rolepill ro" data-act="open-who" title="Sign in"><span class="rp-ic">🔒</span>Read-only<span class="rp-cta">sign in</span></button>`;
 
   const nav = SET_SECTIONS.map((x) => `
-    <button class="setnav${x.key === sec ? ' active' : ''}" data-section="${x.key}">
-      <span class="setnav-ic">${x.icon}</span>
+    <a class="setnav${x.key === sec ? ' active' : ''}" href="#settings/${x.key}" data-section="${x.key}"${x.key === sec ? ' aria-current="page"' : ''}>
+      <span class="setnav-ic" aria-hidden="true">${x.icon}</span>
       <span class="setnav-tx"><b>${esc(x.label)}</b><span>${esc(x.sub)}</span></span>
       ${x.key === 'systems' ? `<span class="setnav-badge">${sysList.length}</span>` : ''}
       ${x.key === 'users' && state.users ? `<span class="setnav-badge">${state.users.length}</span>` : ''}
       ${x.key === 'customers' && state.cust && state.cust.list ? `<span class="setnav-badge">${state.cust.list.length}</span>` : ''}
-    </button>`).join('');
+    </a>`).join('');
+  const secMeta = SET_SECTIONS.find((x) => x.key === sec) || SET_SECTIONS[0];
+  const siteName = s.branding.siteName || 'Intercom Matrix';
+  document.title = `${secMeta.label} · Settings — ${siteName}`;
 
   const panels = {
     systems: secSystems(s, eng, dis, sysList),
@@ -1388,17 +1425,26 @@ function renderSettings() {
   if (sec === 'users' && eng && state.users === null) loadUsers().then(renderSettings);  // lazy-load accounts
 
   wrap.innerHTML = `
-    <div class="set-top">
-      <div class="set-top-l">
-        <span class="set-top-ic">⚙</span>
-        <div><h2>Settings</h2><p class="set-top-sub">Deployment configuration · shared across all clients</p></div>
+    <div class="sp">
+      <aside class="sp-rail">
+        <button class="sp-back" data-act="settings-close"><span aria-hidden="true">←</span> Back to viewer</button>
+        <div class="sp-title">
+          <span class="set-top-ic" aria-hidden="true">⚙</span>
+          <div><h1>Settings</h1><p>${esc(siteName)} · shared across all clients</p></div>
+        </div>
+        <nav class="set-nav sp-nav" aria-label="Settings sections">${nav}</nav>
+        <div class="sp-rail-foot">${rolePill}</div>
+      </aside>
+      <div class="sp-main">
+        <div class="sp-topline">
+          <span class="sp-crumb">Settings <span aria-hidden="true">/</span> <b>${esc(secMeta.label)}</b></span>
+          <span class="set-msg" id="setMsg" role="status"></span>
+        </div>
+        <section class="sp-content" id="setPanel">${panels[sec] || ''}</section>
       </div>
-      <div class="set-top-r"><span class="set-msg" id="setMsg"></span>${rolePill}</div>
-    </div>
-    <div class="set-shell">
-      <nav class="set-nav">${nav}</nav>
-      <section class="set-panel" id="setPanel">${panels[sec] || ''}</section>
     </div>`;
+
+  if (sec === 'customers') paintDual();   // public/customers.js fills the picker lists
 
   // The Systems detail embeds the print version/diff UI (dynamic ids) — re-cache
   // its elements, re-bind drag-drop, and render the selected system's versions.
@@ -1744,6 +1790,7 @@ async function settingsAction(act, ctx) {
   try {
     if (act.startsWith('cust-')) { await customersAction(act, ctx); return; }   // public/customers.js
     if (act === 'open-who') { openAuthModal(false); return; }
+    if (act === 'settings-close') { closeSettings(); return; }
     if (act === 'rerun-setup') { if (window.Onboarding) window.Onboarding.startManual(); return; }
     if (act === 'export-xlsx') { exportXlsx(ctx); return; }
     if (act === 'src-print-pick') { els.printFile.click(); return; }
@@ -2018,8 +2065,10 @@ function applySettings(boot) {
     const def = (state.settings && state.settings.branding.defaultSystem) || sys.default;
     populateSystems(sys.systems, def);
     const view = (state.settings && state.settings.branding.defaultView) || 'matrix';
-    if (view !== 'matrix') showView(view);
+    if (view === 'settings' && !location.hash) history.replaceState(null, '', '#settings/systems');
+    else if (view !== 'matrix' && view !== 'settings') showView(view);
     await loadSnapshot();
+    applyRoute();   // a #settings/<section> deep link opens the Settings page
   } catch (e) {
     els.statusText.textContent = 'Server unreachable: ' + e.message;
   }
