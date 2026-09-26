@@ -15,6 +15,10 @@ node_modules/
 .env.*
 !.env.example
 
+# Local copy of the files staged onto the VPS (compose + config + .env) — the
+# server keeps its own; the repo's docker-compose.deploy.yml is the source of truth.
+deploy-bundle/
+
 # Local config — contains controller IPs; copy systems.example.json -> systems.json
 systems.json
 
