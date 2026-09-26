@@ -1,29 +1,32 @@
 // public/customers.js — Settings → Customer groups (admin) + the scoped-viewer badge.
 //
-// A customer group is a set of SOURCE PANELS per system. The admin ticks the
-// panels a customer owns (e.g. the FIA Race Control desks); the server derives
-// the conferences hosted on them live, so new channels on those panels show up
-// for that customer automatically. The live preview here calls the same
-// derivation (/api/customers/preview) so what you see is what they'll get.
+// A customer group is a set of SOURCE PANELS (any system) plus its members. The
+// server derives the conferences hosted on those panels live, so new channels on
+// them show up for the customer automatically.
 //
-// Loaded BEFORE app.js; everything here is called lazily from app.js, so the
-// app.js globals it uses (state, esc, api, apiWrite, secHead, saveBar, setMsg,
-// renderSettings, loadUsers) exist by the time any of it runs.
+// Editing is direct: every add/remove/rename is saved immediately (with Undo),
+// so there is no Save button to forget. Panels are added by searching across
+// every system at once; members by picking viewer accounts (or, with LDAP/SAML
+// on, a directory user or group). The pure logic lives in cust-model.js.
+//
+// Loaded BEFORE app.js; everything here is called lazily from app.js.
 
-/* global state, esc, api, apiWrite, secHead, saveBar, setMsg, renderSettings, loadUsers, markSettingsDirty, DualList */
+/* global state, esc, api, apiWrite, secHead, setMsg, renderSettings, loadUsers, CustModel */
 
-const CUST_NEW = '__new__';
-const custKey = (sys, addr) => sys + '\u0000' + addr;
+const SEARCH_LIMIT = 150;          // result rows rendered (Add all still acts on every match)
 const PREVIEW_DEBOUNCE_MS = 250;
+const PANELS_TTL_MS = 30000;       // refetch panel lists when revisiting after this long
+const STATUS_MS = 8000;            // how long "Added 21 panels · Undo" stays up
 
 function custState() {
-  if (!state.cust) state.cust = { list: null, sel: null, draft: null, sys: null, panels: {}, preview: null, dl: freshDl() };
+  if (!state.cust) state.cust = { list: null, sel: null, adding: false, panels: {}, panelsAt: 0, channels: null, q: '', qi: 0, mq: '', mi: 0, mOpen: false, status: null };
   return state.cust;
 }
-
-// Picker UI state: a filter + multi-selection per pane (L = available, R = the
-// group) and the shift-click anchor. Reset whenever the customer or system changes.
-const freshDl = () => ({ qL: '', qR: '', selL: new Set(), selR: new Set(), anchorL: null, anchorR: null });
+const current = () => { const c = custState(); return (c.list || []).find((x) => x.id === c.sel) || null; };
+const directoryOn = () => !!(state.auth && (state.auth.ldapEnabled || state.auth.samlEnabled));
+// Directory-group avatar: two heads (inherits the avatar's colour).
+const GROUP_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="6" cy="5.5" r="2.3"/><path d="M1.8 13c.5-2.3 2.2-3.5 4.2-3.5s3.7 1.2 4.2 3.5"/><path d="M10.5 3.4a2.3 2.3 0 0 1 0 4.4M12 9.8c1.2.5 2 1.6 2.3 3.2"/></svg>';
+const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 
 async function loadCustomers() {
   const c = custState();
@@ -31,417 +34,424 @@ async function loadCustomers() {
   return c.list;
 }
 
-function draftFrom(cust) {
-  return {
-    id: cust ? cust.id : null,
-    name: cust ? cust.name : '',
-    description: cust ? cust.description : '',
-    sources: new Map((cust ? cust.sources : []).map((s) => [custKey(s.system, s.addr), s])),
-    users: new Set(cust ? cust.users : []),
-    extraUsers: '',
-    dirGroups: cust ? cust.dirGroups.join('\n') : '',
-  };
-}
-
-// Pull typed-but-unsaved field values into the draft before any re-render.
-function syncDraftFields() {
-  const c = custState(); const d = c.draft; if (!d) return;
-  const W = document.getElementById('setPanel'); if (!W) return;
-  const v = (sel) => { const n = W.querySelector(sel); return n ? n.value : undefined; };
-  if (v('#cuName') !== undefined) d.name = v('#cuName');
-  if (v('#cuDesc') !== undefined) d.description = v('#cuDesc');
-  if (v('#cuExtraUsers') !== undefined) d.extraUsers = v('#cuExtraUsers');
-  if (v('#cuDirGroups') !== undefined) d.dirGroups = v('#cuDirGroups');
-}
-
-async function ensurePanels(sysId) {
+// Panels for every system (search spans them all). Refreshed after PANELS_TTL_MS.
+async function loadAllPanels() {
   const c = custState();
-  if (!sysId || c.panels[sysId]) return;
-  try { c.panels[sysId] = ((await api('/api/panels?system=' + encodeURIComponent(sysId))).panels || []); }
-  catch { c.panels[sysId] = []; }
-}
-
-// ---------- render ----------
-function secCustomers(eng) {
-  const lead = 'Confine a customer to the channels that matter to them. Pick the <b>source panels</b> they own — every conference hosted on those panels is shown to them, including new ones as they’re added. Admins and editors always see everything.';
-  if (!eng) return `${secHead('Customer groups', lead)}<div class="sec-empty">Sign in as an <b>admin</b> to manage customer groups.</div>`;
-  const c = custState();
-  if (c.list === null) { loadCustomers().then(renderSettings); return `${secHead('Customer groups', lead)}<div class="sec-empty">Loading…</div>`; }
-  if (state.users === null) loadUsers().then(renderSettings);
-
-  if (c.sel !== CUST_NEW && c.sel != null && !c.list.some((x) => x.id === c.sel)) { c.sel = null; c.draft = null; }
-  if (c.sel == null && c.list.length) selectCustomer(c.list[0].id);
-
-  const rows = c.list.map((x) => {
-    const systems = new Set(x.sources.map((s) => s.system)).size;
-    return `<button class="sysrow${x.id === c.sel ? ' active' : ''}" data-act="cust-select" data-cust="${x.id}">
-      <span class="cu-ic">${esc((x.name[0] || '?').toUpperCase())}</span>
-      <span class="sysrow-tx"><b>${esc(x.name)}</b><span class="cu-meta">${x.sources.length} panel${x.sources.length === 1 ? '' : 's'} · ${systems} system${systems === 1 ? '' : 's'} · ${x.users.length + x.dirGroups.length} member${x.users.length + x.dirGroups.length === 1 ? '' : 's'}</span></span>
-    </button>`;
-  }).join('');
-
-  const detail = c.draft ? custDetail(c) : `<div class="sec-empty">${c.list.length ? 'Select a customer group on the left.' : 'No customer groups yet — everyone who can sign in sees every channel. Create one to start scoping.'}</div>`;
-  if (c.draft && c.sys && !c.panels[c.sys]) ensurePanels(c.sys).then(() => { renderSettings(); refreshPreview(); });
-
-  return `${secHead('Customer groups', lead)}
-    <div class="sysmd">
-      <aside class="sysmd-list">
-        <div class="sysmd-rows">${rows}</div>
-        <button class="btn small sysmd-add${c.sel === CUST_NEW ? ' active' : ''}" data-act="cust-new">+ New customer group</button>
-      </aside>
-      <div class="sysmd-detail">${detail}</div>
-    </div>`;
-}
-
-function custDetail(c) {
-  const d = c.draft;
   const systems = state.systems || [];
-  if (!c.sys || !systems.some((s) => s.id === c.sys)) c.sys = (systems[0] || {}).id || null;
+  const lists = await Promise.all(systems.map((s) => api('/api/panels?system=' + encodeURIComponent(s.id)).then((r) => r.panels || []).catch(() => [])));
+  c.panels = Object.fromEntries(systems.map((s, i) => [s.id, lists[i]]));
+  c.panelsAt = Date.now();
+}
 
-  const perSys = (sid) => [...d.sources.values()].filter((s) => s.system === sid).length;
-  const sysTabs = systems.map((s) => `
-    <button class="cu-systab${s.id === c.sys ? ' active' : ''}" data-act="cust-sys" data-sys="${esc(s.id)}">
-      ${esc(s.name)}${perSys(s.id) ? `<span class="cu-count">${perSys(s.id)}</span>` : ''}
-    </button>`).join('');
+// ---------- shell (static inputs; lists are painted into it) ----------
+function secCustomers(eng) {
+  const head = secHead('Customer groups', 'Viewers in a group see only the channels on its panels. Admins and editors see everything.');
+  if (!eng) return `${head}<div class="sec-empty">Sign in as an <b>admin</b> to manage customer groups.</div>`;
+  const c = custState();
+  if (c.list === null) { loadCustomers().then(renderSettings); return `${head}<div class="sec-empty">Loading…</div>`; }
+  if (state.users === null) loadUsers().then(paintCustomers);
+  if (Date.now() - c.panelsAt > PANELS_TTL_MS) { c.panelsAt = Date.now(); loadAllPanels().then(() => { paintCustomers(); refreshChannels(); }); }
 
-  const head = `
-    <div class="sysd-head">
-      <input id="cuName" class="sysd-name" value="${esc(d.name)}" placeholder="Customer name — e.g. FIA Race Control" aria-label="Customer group name" />
-      <span class="grow"></span>
-      ${d.id ? '<button class="btn small danger" data-act="cust-del">Delete</button>' : ''}
-    </div>`;
+  if (c.sel != null && !current()) c.sel = null;
+  if (c.sel == null && c.list.length) { c.sel = c.list[0].id; refreshChannels(); }
+  if (!c.list.length) c.adding = true;
 
+  const cust = current();
+  const add = c.adding
+    ? `<input id="cuNew" class="cu-new" placeholder="New group name" aria-label="New customer group name" autocomplete="off" />`
+    : '<button class="cu-addg" data-act="cust-new">+ New group</button>';
   return `${head}
-    <div class="sysd-body">
-      <label class="fl"><span>Description <span class="muted">(optional)</span></span><input id="cuDesc" value="${esc(d.description)}" placeholder="Who this is for" /></label>
-
-      <section class="sysd-sec">
-        <div class="sysd-sec-h"><h4>Source panels</h4><span class="muted cu-total">${d.sources.size} selected</span></div>
-        <p class="sysd-note">The panels this customer owns. Their conferences — and anyone else on those conferences — become visible to the group.</p>
-        ${systems.length ? `<div class="cu-systabs" role="tablist">${sysTabs}</div>` : '<div class="sec-empty">No systems defined.</div>'}
-        ${c.sys ? custPanelPicker(c) : ''}
-      </section>
-
-      <section class="sysd-sec">
-        <div class="sysd-sec-h"><h4>Resolves to</h4><span class="muted" id="cuPreviewCount"></span></div>
-        <div class="cu-preview" id="cuPreview" aria-live="polite">${custPreviewHtml(c)}</div>
-      </section>
-
-      <section class="sysd-sec">
-        <div class="sysd-sec-h"><h4>Members</h4></div>
-        <p class="sysd-note">Who is confined to this group. Only <b>viewer</b> accounts are scoped; a viewer in no group sees nothing once any group exists.</p>
-        ${custUserPicker(d)}
-        <label class="fl"><span>Other usernames <span class="muted">(LDAP / SAML users, comma-separated)</span></span><input id="cuExtraUsers" value="${esc(d.extraUsers)}" placeholder="jsmith, fia.steward" spellcheck="false" autocapitalize="none" /></label>
-        <label class="fl"><span>Directory groups <span class="muted">(one per line — LDAP group DN or SAML group claim)</span></span><textarea id="cuDirGroups" rows="3" spellcheck="false" placeholder="CN=FIA-RaceControl,OU=Groups,DC=corp,DC=com">${esc(d.dirGroups)}</textarea></label>
-        <p class="sec-note">⚠ A directory group listed here also <b>grants sign-in</b>: every member of it can log in as a viewer, even if they're in no role group. Use a dedicated group, never a broad one like <i>Domain Users</i>.</p>
-      </section>
-    </div>
-    ${saveBar('cust-save', d.id ? 'Save customer group' : 'Create customer group')}`;
-}
-
-function custPanelPicker(c) {
-  const panels = c.panels[c.sys];
-  if (!panels) return '<div class="sec-empty">Loading panels…</div>';
-  if (!panels.length) return '<div class="sec-empty">This system has no panel data yet — upload a config print first.</div>';
-  const dl = c.dl;
-  const pane = (side, title, sub, q, ph) => `
-    <div class="dl-pane dl-${side}">
-      <div class="dl-head">
-        <input type="checkbox" class="dl-all" data-dl-all="${side}" aria-label="Select all shown in ${title}" title="Select all shown" />
-        <div class="dl-title"><b>${title}</b><span>${sub}</span></div>
-        <span class="dl-count" id="dlCount${side}"></span>
-      </div>
-      <input class="dl-filter" type="search" data-dl-filter="${side}" value="${esc(q)}" placeholder="${ph}" aria-label="${ph}" autocomplete="off" spellcheck="false" />
-      <ul class="dl-list" id="dlList${side}" role="listbox" aria-multiselectable="true" aria-label="${title}"></ul>
+    <div class="cu">
+      <nav class="cu-groups" aria-label="Customer groups"><div id="cuList"></div>${add}</nav>
+      <div class="cu-main">${cust ? custShell(cust) : `<div class="sec-empty">${c.list.length ? 'Select a group.' : 'Name your first customer group to start scoping viewers.'}</div>`}</div>
     </div>`;
-  return `
-    <div class="xfer" id="cuDual">
-      ${pane('L', 'Available', 'Panels on this system', dl.qL, 'Filter available…')}
-      <div class="dl-mid" role="group" aria-label="Move panels">
-        <button class="btn dl-btn primary" data-act="cust-dl-add" id="dlAdd"></button>
-        <button class="btn dl-btn" data-act="cust-dl-addall" id="dlAddAll"></button>
-        <span class="dl-sep" aria-hidden="true"></span>
-        <button class="btn dl-btn" data-act="cust-dl-rm" id="dlRm"></button>
-        <button class="btn dl-btn" data-act="cust-dl-rmall" id="dlRmAll"></button>
-      </div>
-      ${pane('R', 'Active group', 'Source panels for this customer', dl.qR, 'Filter group…')}
-    </div>
-    <p class="dl-hint">Click to select · <kbd>Shift</kbd>-click for a range · double-click, <kbd>Enter</kbd> or a row's arrow moves it across.</p>`;
 }
 
-// ---------- dual-list paint (no full re-render: keeps filter focus + scroll) ----------
-function dlModel(c) {
-  const sources = [...c.draft.sources.values()].filter((s) => s.system === c.sys);
-  return DualList.splitSources(c.panels[c.sys] || [], sources);
+function custShell(cust) {
+  const c = custState();
+  return `
+    <header class="cu-head">
+      <div class="cu-titles">
+        <input id="cuName" class="cu-name" value="${esc(cust.name)}" aria-label="Group name" autocomplete="off" spellcheck="false" />
+        <input id="cuDesc" class="cu-desc" value="${esc(cust.description)}" placeholder="Add a description" aria-label="Description" autocomplete="off" />
+      </div>
+      <div class="cu-status" id="cuStatus" role="status" aria-live="polite"></div>
+      <button class="btn small danger" data-act="cust-del">Delete</button>
+    </header>
+    <div class="cu-cols">
+      <section class="cu-sec" aria-labelledby="cuPanelsH">
+        <h4 id="cuPanelsH">Panels <span class="cu-n" id="cuPanelsN"></span></h4>
+        <div class="cu-search">
+          <input id="cuQ" type="search" value="${esc(c.q)}" placeholder="Search panels to add — name, type or system" aria-label="Search panels to add"
+            role="combobox" aria-controls="cuResults" aria-autocomplete="list" aria-expanded="false" autocomplete="off" spellcheck="false" />
+          <div id="cuResults" class="cu-pop" role="listbox" aria-label="Matching panels" aria-multiselectable="true" hidden></div>
+        </div>
+        <div id="cuPanels"></div>
+      </section>
+      <div class="cu-aside">
+        <section class="cu-sec" aria-labelledby="cuMembersH">
+          <h4 id="cuMembersH">Members <span class="cu-n" id="cuMembersN"></span></h4>
+          <div class="cu-search">
+            <input id="cuMq" type="search" value="${esc(c.mq)}" placeholder="${directoryOn() ? 'Add a viewer, user or directory group' : 'Add a viewer'}" aria-label="Add member"
+              role="combobox" aria-controls="cuMResults" aria-autocomplete="list" aria-expanded="false" autocomplete="off" spellcheck="false" />
+            <div id="cuMResults" class="cu-pop" role="listbox" aria-label="Suggestions" hidden></div>
+          </div>
+          <ul id="cuMembers" class="cu-members"></ul>
+        </section>
+        <section class="cu-sec" id="cuChannels"></section>
+      </div>
+    </div>`;
 }
-function dlRow(item, side, selected) {
-  const n = (item.memberships || []).length;
-  const sub = item.missing ? '<span class="dl-warn">not in the current print</span>' : (item.addr !== item.name ? `<span>${esc(item.addr)}</span>` : '');
-  const verb = side === 'L' ? 'Add' : 'Remove';
-  return `<li class="dl-item${selected ? ' sel' : ''}${item.missing ? ' missing' : ''}" role="option" aria-selected="${selected}" tabindex="0" data-side="${side}" data-key="${esc(item.key)}">
-    <span class="dl-check" aria-hidden="true"></span>
-    <span class="dl-tx"><b>${esc(item.name)}</b>${sub}</span>
-    ${item.missing ? '' : `<span class="dl-n" title="${n} conference${n === 1 ? '' : 's'}">${n}</span>`}
-    <button class="dl-move" data-act="cust-dl-one" data-side="${side}" data-key="${esc(item.key)}" tabindex="-1" title="${verb} ${esc(item.name)}" aria-label="${verb} ${esc(item.name)}">${side === 'L' ? '→' : '←'}</button>
+
+// ---------- paint (fills the shell; never touches the inputs) ----------
+function paintCustomers() {
+  if (!document.getElementById('cuList')) return;
+  paintGroupList();
+  if (!current()) return;
+  paintPanels(); paintResults(); paintMembers(); paintChannels(); paintStatus();
+}
+
+function paintGroupList() {
+  const c = custState();
+  document.getElementById('cuList').innerHTML = (c.list || []).map((x) => {
+    const members = x.users.length + x.dirGroups.length;
+    return `<button class="cu-g${x.id === c.sel ? ' active' : ''}" data-act="cust-select" data-cust="${x.id}"${x.id === c.sel ? ' aria-current="true"' : ''}>
+      <b>${esc(x.name)}</b><span>${plural(x.sources.length, 'panel')} · ${plural(members, 'member')}</span></button>`;
+  }).join('');
+}
+
+function paintPanels() {
+  const c = custState(); const cust = current();
+  const groups = CustModel.resolveSources(c.panels, state.systems, cust.sources);
+  document.getElementById('cuPanelsN').textContent = cust.sources.length || '';
+  const host = document.getElementById('cuPanels');
+  if (!groups.length) { host.innerHTML = '<p class="cu-empty">No panels yet — search above to add them.</p>'; return; }
+  host.innerHTML = groups.map((g) => `
+    <div class="cu-sys">
+      <div class="cu-sys-h"><b>${esc(g.sysName)}</b><span>${g.items.length}</span></div>
+      <ul class="cu-plist">${g.items.map(panelRow).join('')}</ul>
+    </div>`).join('');
+}
+function panelRow(p) {
+  const n = (p.memberships || []).length;
+  const meta = p.missing ? '<span class="cu-warn">not in current print</span>' : (p.type ? `<span>${esc(p.type)}</span>` : '');
+  return `<li class="cu-p${p.missing ? ' missing' : ''}">
+    <span class="cu-p-tx"><b title="${esc(p.name)}">${esc(p.name)}</b>${meta}</span>
+    ${p.missing ? '' : `<span class="cu-ch" title="${plural(n, 'channel')}">${n}</span>`}
+    <button class="cu-x" data-act="cust-rm" data-sys="${esc(p.system)}" data-addr="${esc(p.source.addr)}" aria-label="Remove ${esc(p.name)}" title="Remove">×</button>
   </li>`;
 }
-function paintList(side, items, q, sel) {
-  const ul = document.getElementById('dlList' + side); if (!ul) return;
-  const shown = items.filter((i) => DualList.matches(i, q));
-  const empty = items.length
-    ? 'Nothing matches the filter.'
-    : (side === 'L' ? 'Every panel is in the group.' : 'No source panels yet — add some from the left.');
-  ul.innerHTML = shown.length ? shown.map((i) => dlRow(i, side, sel.has(i.key))).join('') : `<li class="dl-empty">${empty}</li>`;
+
+function searchResult() {
+  const c = custState();
+  return CustModel.search(c.panels, state.systems, current().sources, c.q, SEARCH_LIMIT);
 }
-// Counts + select-all state for one pane (touches no rows).
-function paintPaneControls(side, items, q, sel) {
-  const shown = items.filter((i) => DualList.matches(i, q));
-  const count = document.getElementById('dlCount' + side);
-  if (count) count.textContent = q ? `${shown.length} of ${items.length}` : String(items.length);
-  const all = document.querySelector(`[data-dl-all="${side}"]`);
-  if (all) {
-    const nSel = shown.filter((i) => sel.has(i.key)).length;
-    all.checked = shown.length > 0 && nSel === shown.length;
-    all.indeterminate = nSel > 0 && nSel < shown.length;
-    all.disabled = !shown.length;
-  }
-  return shown;
-}
-function setBtn(id, label, n) {
-  const b = document.getElementById(id); if (!b) return;
-  b.textContent = label; b.disabled = !n;
-}
-// Full paint: rebuild both lists (after a move or a filter change), then controls.
-function paintDual() {
-  if (!document.getElementById('cuDual')) return;
-  const c = custState(); const dl = c.dl;
-  const { available, chosen } = dlModel(c);
-  paintList('L', available, dl.qL, dl.selL);
-  paintList('R', chosen, dl.qR, dl.selR);
-  paintControls();
-}
-// Light paint: selection changed — flip row state in place (the row elements
-// survive, so double-click and keyboard focus keep working), then controls.
-function paintSelection(side) {
-  const sel = custState().dl['sel' + side];
-  for (const row of document.querySelectorAll(`#dlList${side} .dl-item`)) {
-    const on = sel.has(row.dataset.key);
-    row.classList.toggle('sel', on);
-    row.setAttribute('aria-selected', String(on));
-  }
-  paintControls();
-}
-function paintControls() {
-  const c = custState(); const dl = c.dl;
-  const { available, chosen } = dlModel(c);
-  const shownL = paintPaneControls('L', available, dl.qL, dl.selL);
-  const shownR = paintPaneControls('R', chosen, dl.qR, dl.selR);
-  const nAdd = DualList.visibleSelected(available, dl.selL, dl.qL).length;
-  const nRm = DualList.visibleSelected(chosen, dl.selR, dl.qR).length;
-  setBtn('dlAdd', nAdd ? `Add ${nAdd} selected →` : 'Add selected →', nAdd);
-  setBtn('dlAddAll', dl.qL ? `Add all ${shownL.length} matching ⇉` : `Add all ${shownL.length} ⇉`, shownL.length);
-  setBtn('dlRm', nRm ? `← Remove ${nRm} selected` : '← Remove selected', nRm);
-  setBtn('dlRmAll', dl.qR ? `⇇ Remove all ${shownR.length} matching` : `⇇ Remove all ${shownR.length}`, shownR.length);
-  // keep the per-system tab badges + total in step with the draft
-  const total = document.querySelector('.cu-total'); if (total) total.textContent = `${c.draft.sources.size} selected`;
-  for (const tab of document.querySelectorAll('.cu-systab')) {
-    const n = [...c.draft.sources.values()].filter((x) => x.system === tab.dataset.sys).length;
-    let badge = tab.querySelector('.cu-count');
-    if (n && !badge) { badge = document.createElement('span'); badge.className = 'cu-count'; tab.appendChild(badge); }
-    if (badge) { if (n) badge.textContent = String(n); else badge.remove(); }
-  }
+function paintResults() {
+  const c = custState();
+  const pop = document.getElementById('cuResults'); const input = document.getElementById('cuQ');
+  const r = searchResult();
+  const open = !!c.q.trim();
+  pop.hidden = !open; input.setAttribute('aria-expanded', String(open));
+  if (!open) { input.removeAttribute('aria-activedescendant'); return; }
+  if (!r.total) { pop.innerHTML = '<p class="cu-empty">No panels match.</p>'; return; }
+  const flat = r.groups.flatMap((g) => g.items);
+  c.qi = Math.min(c.qi, flat.length - 1);
+  const inGroup = r.total - r.fresh.length;
+  const bulk = r.fresh.length
+    ? `<button class="btn small primary" data-act="cust-addall">Add all ${r.fresh.length}</button>`
+    : `<button class="btn small" data-act="cust-rmall">Remove all ${inGroup}</button>`;
+  let i = 0;
+  pop.innerHTML = `
+    <div class="cu-pop-h"><span>${plural(r.total, 'match', 'matches')}${inGroup ? ` · ${inGroup} in group` : ''}</span>${bulk}</div>
+    <div class="cu-pop-list">${r.groups.map((g) => `
+      <div class="cu-pop-sys" role="presentation">${esc(g.sysName)}</div>
+      ${g.items.map((p) => { const idx = i++; return `
+        <div class="cu-opt${p.added ? ' on' : ''}${idx === c.qi ? ' active' : ''}" id="cuOpt${idx}" role="option" aria-selected="${p.added}" data-act="cust-toggle" data-idx="${idx}">
+          <span class="cu-tick" aria-hidden="true"></span>
+          <span class="cu-p-tx"><b>${esc(p.name)}</b>${p.type ? `<span>${esc(p.type)}</span>` : ''}</span>
+          <span class="cu-ch" title="${plural((p.memberships || []).length, 'channel')}">${(p.memberships || []).length}</span>
+        </div>`; }).join('')}`).join('')}
+    </div>
+    ${r.shown < r.total ? `<p class="cu-more">Showing ${r.shown} of ${r.total} — refine the search to see the rest.</p>` : ''}`;
+  input.setAttribute('aria-activedescendant', 'cuOpt' + c.qi);
 }
 
-// Move the given keys across. side 'L' = add to the group, 'R' = remove from it.
-function dlMove(side, keys) {
-  const c = custState(); const d = c.draft; if (!d || !keys.length) return;
-  const dl = c.dl; const move = new Set(keys);
-  const { available, chosen } = dlModel(c);
-  if (side === 'L') {
-    for (const p of available) if (move.has(p.key)) d.sources.set(custKey(c.sys, p.addr), { system: c.sys, addr: p.addr, name: p.name });
-    dl.selL = new Set([...dl.selL].filter((k) => !move.has(k)));
-  } else {
-    for (const it of chosen) if (move.has(it.key)) d.sources.delete(custKey(c.sys, it.source.addr));
-    dl.selR = new Set([...dl.selR].filter((k) => !move.has(k)));
-  }
-  paintDual(); refreshPreview(); markSettingsDirty();
+function paintMembers() {
+  const c = custState(); const cust = current();
+  const rows = CustModel.memberRows(cust, state.users || []);
+  document.getElementById('cuMembersN').textContent = rows.length || '';
+  const sub = (m) => m.kind === 'group' ? 'Directory group' : m.kind === 'user' ? 'Directory user' : m.unscoped ? `${esc(m.role)} · sees everything` : esc(m.sub);
+  const icon = (m) => m.kind === 'group' ? `<span class="cu-av grp" aria-hidden="true">${GROUP_ICON}</span>`
+    : `<span class="cu-av${m.unscoped ? ' dim' : ''}" aria-hidden="true">${esc((m.label[0] || '?').toUpperCase())}</span>`;
+  const list = document.getElementById('cuMembers');
+  list.innerHTML = rows.length ? rows.map((m) => `
+    <li class="cu-m${m.unscoped ? ' unscoped' : ''}">${icon(m)}
+      <span class="cu-p-tx"><b title="${esc(m.label)}">${esc(m.label)}</b><span>${sub(m)}</span></span>
+      <button class="cu-x" data-act="cust-mrm" data-kind="${m.kind}" data-val="${esc(m.value)}" aria-label="Remove ${esc(m.label)}" title="Remove">×</button>
+    </li>`).join('') : '<li class="cu-empty">No members yet.</li>';
+  if (rows.some((m) => m.kind === 'group')) list.insertAdjacentHTML('beforeend', '<li class="cu-note">Directory groups also let all their members sign in as viewers.</li>');
+  paintMemberSuggestions();
 }
-function dlShownKeys(side) {
-  const c = custState(); const { available, chosen } = dlModel(c);
-  return (side === 'L' ? available : chosen).filter((i) => DualList.matches(i, side === 'L' ? c.dl.qL : c.dl.qR)).map((i) => i.key);
+function memberSuggestions() {
+  const c = custState();
+  return CustModel.memberSuggestions(c.mq, current(), state.users || [], directoryOn());
 }
-function dlSelect(side, key, extendRange) {
-  const dl = custState().dl;
-  const selKey = 'sel' + side, anchorKey = 'anchor' + side;
-  if (extendRange && dl[anchorKey]) dl[selKey] = new Set([...dl[selKey], ...DualList.range(dlShownKeys(side), dl[anchorKey], key)]);
-  else { dl[selKey] = DualList.toggle(dl[selKey], key); dl[anchorKey] = key; }
-  paintSelection(side);
-}
-
-function custUserPicker(d) {
-  const locals = state.users || [];
-  const localNames = new Set(locals.map((u) => u.username.toLowerCase()));
-  // Usernames in the group that aren't local accounts live in the free-text box
-  // (split once the local roster has loaded, so none land in both places).
-  if (!d._split && state.users) {
-    const extra = [...d.users].filter((u) => !localNames.has(u.toLowerCase()));
-    if (extra.length && !d.extraUsers) d.extraUsers = extra.join(', ');
-    d._split = true;
-  }
-  if (!locals.length) return '';
-  const has = (u) => [...d.users].some((x) => x.toLowerCase() === u.toLowerCase());
-  return `<div class="cu-users">${locals.map((u) => {
-    const scopable = u.role === 'viewer';
-    return `<label class="cu-user${scopable ? '' : ' na'}" title="${scopable ? '' : 'Admins and editors always see everything'}">
-      <input type="checkbox" data-act="cust-user" data-user="${esc(u.username)}"${has(u.username) ? ' checked' : ''} />
-      <span class="person-av role-${esc(u.role)}">${esc(((u.display_name || u.username)[0] || '?').toUpperCase())}</span>
-      <span class="cu-user-tx"><b>${esc(u.display_name || u.username)}</b><span>${esc(u.username)} · ${esc(u.role)}</span></span>
-    </label>`;
-  }).join('')}</div>`;
+function paintMemberSuggestions() {
+  const c = custState();
+  const pop = document.getElementById('cuMResults'); const input = document.getElementById('cuMq');
+  const list = memberSuggestions();
+  const open = c.mOpen && (list.length > 0 || !!c.mq.trim());
+  pop.hidden = !open; input.setAttribute('aria-expanded', String(open));
+  if (!open) { input.removeAttribute('aria-activedescendant'); return; }
+  c.mi = Math.max(0, Math.min(c.mi, list.length - 1));
+  const what = (s) => s.kind === 'group' ? 'Add directory group' : s.kind === 'user' ? 'Add directory user' : esc(s.sub);
+  pop.innerHTML = list.length ? `<div class="cu-pop-list">${list.map((s, i) => `
+    <div class="cu-opt${i === c.mi ? ' active' : ''}" id="cuMOpt${i}" role="option" aria-selected="false" data-act="cust-madd" data-idx="${i}">
+      <span class="cu-av${s.kind === 'group' ? ' grp' : ''}" aria-hidden="true">${s.kind === 'group' ? GROUP_ICON : esc((s.label[0] || '?').toUpperCase())}</span>
+      <span class="cu-p-tx"><b>${esc(s.label)}</b>${what(s) ? `<span>${what(s)}</span>` : ''}</span>
+    </div>`).join('')}</div>`
+    : `<p class="cu-empty">No viewer account matches.${state.users && !state.users.some((u) => u.role === 'viewer') ? ' Create viewer accounts under Users.' : ''}</p>`;
+  if (list.length) input.setAttribute('aria-activedescendant', 'cuMOpt' + c.mi);
 }
 
-function custPreviewHtml(c) {
-  const p = c.preview;
-  const sysName = ((state.systems || []).find((s) => s.id === c.sys) || {}).name || c.sys || '';
-  if (!c.sys) return '';
-  const selected = [...c.draft.sources.values()].filter((s) => s.system === c.sys).length;
-  if (!selected) return `<div class="cu-empty">Tick source panels on <b>${esc(sysName)}</b> to see which conferences this group will see.</div>`;
-  if (!p || p.sys !== c.sys) return '<div class="cu-empty">Resolving…</div>';
-  if (!p.conferences.length) return `<div class="cu-empty">These panels host no conferences on <b>${esc(sysName)}</b>.</div>`;
-  const chips = p.conferences.map((x) => `<span class="cu-chip${x.kind === 'group' ? ' grp' : ''}" title="${esc(x.label || '')}">${esc(x.name)}</span>`).join('');
-  return `<div class="cu-summary"><b>${p.conferences.length}</b> conference${p.conferences.length === 1 ? '' : 's'} · <b>${p.panelCount}</b> panel${p.panelCount === 1 ? '' : 's'} visible on ${esc(sysName)}</div><div class="cu-chips">${chips}</div>`;
+function paintChannels() {
+  const c = custState(); const cust = current();
+  const host = document.getElementById('cuChannels'); if (!host) return;
+  const ch = c.channels && c.channels.id === cust.id ? c.channels : null;
+  if (!cust.sources.length) { host.innerHTML = ''; return; }
+  if (!ch) { host.innerHTML = '<h4>Channels <span class="cu-n">…</span></h4>'; return; }
+  const body = ch.groups.map((g) => `${ch.groups.length > 1 ? `<div class="cu-sys-h"><b>${esc(g.sysName)}</b><span>${g.confs.length}</span></div>` : ''}
+    <ul class="cu-chlist">${g.confs.map((x) => `<li title="${esc(x.label || '')}">${esc(x.name)}</li>`).join('')}</ul>`).join('');
+  host.innerHTML = `<details class="cu-chan"${c.chanOpen ? ' open' : ''}><summary><h4>Channels <span class="cu-n">${ch.total}</span></h4><span class="cu-chev" aria-hidden="true"></span></summary>${ch.total ? body : '<p class="cu-empty">These panels host no channels.</p>'}</details>`;
 }
 
-// ---------- live preview ----------
-let previewTimer = null;
-let previewSeq = 0;
-function refreshPreview() {
+function paintStatus() {
+  const el = document.getElementById('cuStatus'); if (!el) return;
+  const s = custState().status;
+  el.className = 'cu-status' + (s && s.bad ? ' bad' : '');
+  el.innerHTML = s ? `${esc(s.text)}${s.undo ? ' <button class="cu-undo" data-act="cust-undo">Undo</button>' : ''}` : '';
+}
+let statusTimer = null;
+function showSaveState(text, { undo = null, bad = false, sticky = false } = {}) {
+  const c = custState();
+  c.status = text ? { text, undo, bad } : null;
+  clearTimeout(statusTimer);
+  if (text && !sticky) statusTimer = setTimeout(() => { c.status = null; paintStatus(); }, STATUS_MS);
+  paintStatus();
+}
+
+// ---------- live channel preview (per system, in parallel) ----------
+let previewTimer = null, previewSeq = 0;
+function refreshChannels() {
   clearTimeout(previewTimer);
   previewTimer = setTimeout(async () => {
-    const c = custState(); if (!c.draft || !c.sys) return;
-    const sys = c.sys;
-    const sources = [...c.draft.sources.values()].filter((s) => s.system === sys);
+    const c = custState(); const cust = current(); if (!cust) return;
     const seq = ++previewSeq;
-    if (!sources.length) { c.preview = null; paintPreview(); return; }
-    try {
-      const r = await apiWrite('/api/customers/preview?system=' + encodeURIComponent(sys), 'POST', { sources });
-      if (seq !== previewSeq) return;   // a newer toggle superseded this one
-      c.preview = { sys, conferences: r.conferences || [], panelCount: r.panelCount || 0 };
-    } catch (e) { c.preview = { sys, conferences: [], panelCount: 0 }; setMsg('Preview failed: ' + e.message, false); }
-    paintPreview();
+    const systems = [...new Set(cust.sources.map((s) => s.system))];
+    const results = await Promise.all(systems.map((sys) =>
+      apiWrite('/api/customers/preview?system=' + encodeURIComponent(sys), 'POST', { sources: cust.sources.filter((s) => s.system === sys) })
+        .then((r) => r.conferences || []).catch(() => [])));
+    if (seq !== previewSeq) return;   // a newer change superseded this one
+    const groups = systems.map((sys, i) => ({ system: sys, sysName: ((state.systems || []).find((s) => s.id === sys) || {}).name || sys, confs: results[i] }))
+      .filter((g) => g.confs.length);
+    c.channels = { id: cust.id, groups, total: groups.reduce((n, g) => n + g.confs.length, 0) };
+    paintChannels();
   }, PREVIEW_DEBOUNCE_MS);
 }
-function paintPreview() {
-  const el = document.getElementById('cuPreview'); if (el) el.innerHTML = custPreviewHtml(custState());
+
+// ---------- saving: optimistic, serialized, undoable ----------
+let saveChain = Promise.resolve();
+let pending = 0;
+function commit(patch, { msg = 'Saved', undo = null } = {}) {
+  const c = custState(); const cust = current(); if (!cust) return;
+  const id = cust.id;
+  c.list = c.list.map((x) => (x.id === id ? { ...x, ...patch } : x));
+  pending++;
+  showSaveState('Saving…', { sticky: true });
+  paintCustomers();
+  if (patch.sources) refreshChannels();
+  saveChain = saveChain.then(async () => {
+    try {
+      const saved = await apiWrite('/api/customers/' + id, 'PATCH', patch);
+      pending--;
+      // Only adopt the server copy once no newer optimistic edit is in flight.
+      if (!pending) c.list = c.list.map((x) => (x.id === id ? saved : x));
+      if (!pending) showSaveState(msg, { undo: undo ? { id, patch: undo } : null });
+    } catch (e) {
+      pending--;
+      await loadCustomers();
+      showSaveState('Not saved — ' + e.message, { bad: true });
+      refreshChannels();
+    }
+    if (custState().sel === id) { const n = document.getElementById('cuName'); if (n && document.activeElement !== n) n.value = current().name; }
+    paintCustomers();
+  });
+}
+
+function changeSources(next, msg) {
+  const prev = current().sources;
+  commit({ sources: next }, { msg, undo: { sources: prev } });
+}
+function changeMembers(next, msg) {
+  const cust = current();
+  commit({ users: next.users, dirGroups: next.dirGroups }, { msg, undo: { users: cust.users, dirGroups: cust.dirGroups } });
 }
 
 function selectCustomer(id) {
   const c = custState();
-  c.sel = id;
-  c.draft = draftFrom(id === CUST_NEW ? null : c.list.find((x) => x.id === id));
-  c.preview = null;
-  c.dl = freshDl();
-  const first = c.draft.sources.size ? [...c.draft.sources.values()][0].system : null;
-  if (first) c.sys = first;
-  refreshPreview();
-}
-
-function draftPayload(d) {
-  const extra = d.extraUsers.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
-  return {
-    name: d.name.trim(),
-    description: d.description.trim(),
-    sources: [...d.sources.values()].map((s) => ({ system: s.system, addr: s.addr, name: s.name })),
-    users: [...new Set([...[...d.users].filter((u) => (state.users || []).some((x) => x.username.toLowerCase() === u.toLowerCase())), ...extra])],
-    dirGroups: d.dirGroups.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
-  };
+  c.sel = id; c.q = ''; c.qi = 0; c.mq = ''; c.mi = 0; c.mOpen = false; c.channels = null; c.status = null; c.adding = false;
+  renderSettings(); refreshChannels();
 }
 
 // ---------- actions (delegated from app.js settingsAction) ----------
 async function customersAction(act, el) {
   const c = custState();
-  syncDraftFields();
-  if (act === 'cust-select') { selectCustomer(Number(el.dataset.cust)); renderSettings(); return; }
-  if (act === 'cust-new') { selectCustomer(CUST_NEW); renderSettings(); return; }
-  if (act === 'cust-sys') { c.sys = el.dataset.sys; c.preview = null; c.dl = freshDl(); await ensurePanels(c.sys); renderSettings(); refreshPreview(); return; }
-  if (!c.draft) return;
-  const d = c.draft;
+  if (act === 'cust-select') { selectCustomer(Number(el.dataset.cust)); return; }
+  if (act === 'cust-new') { c.adding = true; renderSettings(); document.getElementById('cuNew').focus(); return; }
+  const cust = current(); if (!cust) return;
 
-  if (act === 'cust-dl-one') { dlMove(el.dataset.side, [el.dataset.key]); return; }
-  if (act === 'cust-dl-add') { dlMove('L', DualList.visibleSelected(dlModel(c).available, c.dl.selL, c.dl.qL).map((i) => i.key)); return; }
-  if (act === 'cust-dl-rm') { dlMove('R', DualList.visibleSelected(dlModel(c).chosen, c.dl.selR, c.dl.qR).map((i) => i.key)); return; }
-  if (act === 'cust-dl-addall') { dlMove('L', dlShownKeys('L')); return; }
-  if (act === 'cust-dl-rmall') { dlMove('R', dlShownKeys('R')); return; }
-  if (act === 'cust-user') {
-    if (el.checked) d.users.add(el.dataset.user);
-    else for (const u of [...d.users]) if (u.toLowerCase() === el.dataset.user.toLowerCase()) d.users.delete(u);
+  if (act === 'cust-toggle') {
+    const item = searchResult().groups.flatMap((g) => g.items)[Number(el.dataset.idx)]; if (!item) return;
+    c.qi = Number(el.dataset.idx);
+    if (item.added) changeSources(CustModel.removeSources(cust.sources, [item.sourceKey]), `Removed ${item.name}`);
+    else changeSources(CustModel.addSources(cust.sources, [item]), `Added ${item.name}`);
+    document.getElementById('cuQ').focus();
     return;
   }
-  if (act === 'cust-save') {
-    const body = draftPayload(d);
-    if (!body.name) { setMsg('Give the customer group a name.', false); return; }
-    const saved = d.id
-      ? await apiWrite('/api/customers/' + d.id, 'PATCH', body)
-      : await apiWrite('/api/customers', 'POST', body);
-    await loadCustomers();
-    selectCustomer(saved.id);
-    renderSettings();
-    setMsg(`Saved "${saved.name}".`, true);
+  if (act === 'cust-addall') {
+    const fresh = searchResult().fresh;
+    closeSearch();   // bulk done: show the result (and Undo), don't leave a flipped button under the cursor
+    changeSources(CustModel.addSources(cust.sources, fresh), `Added ${plural(fresh.length, 'panel')}`);
     return;
   }
-  if (act === 'cust-del' && d.id) {
-    if (!confirm(`Delete customer group "${d.name}"? Its members will see nothing (or everything, if no groups remain).`)) return;
-    await apiWrite('/api/customers/' + d.id, 'DELETE');
-    c.sel = null; c.draft = null;
-    await loadCustomers(); renderSettings(); setMsg('Customer group deleted.', true);
+  if (act === 'cust-rmall') {
+    const r = CustModel.search(c.panels, state.systems, cust.sources, c.q);
+    const added = r.groups.flatMap((g) => g.items).filter((p) => p.added);
+    closeSearch();
+    changeSources(CustModel.removeSources(cust.sources, added.map((p) => p.sourceKey)), `Removed ${plural(added.length, 'panel')}`);
+    return;
+  }
+  if (act === 'cust-rm') {
+    // (keys join system + address with NUL, which can't survive an HTML attribute — rebuild it)
+    const key = CustModel.sourceKey(el.dataset.sys, el.dataset.addr);
+    const item = CustModel.resolveSources(c.panels, state.systems, cust.sources).flatMap((g) => g.items).find((p) => p.key === key);
+    changeSources(CustModel.removeSources(cust.sources, [key]), `Removed ${item ? item.name : 'panel'}`);
+    return;
+  }
+  if (act === 'cust-madd') { addMemberAt(Number(el.dataset.idx)); return; }
+  if (act === 'cust-mrm') {
+    const m = { kind: el.dataset.kind, value: el.dataset.val };
+    changeMembers(CustModel.removeMember(cust, m), `Removed ${m.value}`);
+    return;
+  }
+  if (act === 'cust-undo') {
+    const u = c.status && c.status.undo; if (!u || u.id !== cust.id) return;
+    commit(u.patch, { msg: 'Undone' });
+    return;
+  }
+  if (act === 'cust-del') {
+    if (!confirm(`Delete "${cust.name}"? Its members will see nothing (or everything, if no groups remain).`)) return;
+    await apiWrite('/api/customers/' + cust.id, 'DELETE');
+    c.sel = null; c.channels = null;
+    await loadCustomers(); renderSettings(); setMsg(`Deleted "${cust.name}".`, true);
   }
 }
 
-// ---------- dual-list pointer + keyboard (delegated; rows re-paint freely) ----------
-// Filters and select-all are handled in the CAPTURE phase and stopped there, so
-// the Settings panel's own input/change listeners don't mark the form dirty for
-// what is only a view filter.
+function closeSearch() {
+  const c = custState(); c.q = ''; c.qi = 0;
+  const q = document.getElementById('cuQ'); if (q) { q.value = ''; q.blur(); }
+}
+
+function addMemberAt(idx) {
+  const c = custState();
+  const s = memberSuggestions()[idx]; if (!s) return;
+  c.mq = ''; c.mi = 0;
+  const input = document.getElementById('cuMq'); if (input) { input.value = ''; input.focus(); }
+  changeMembers(CustModel.addMember(current(), s), `Added ${s.label}`);
+}
+
+async function createCustomer(name) {
+  const c = custState();
+  try {
+    const saved = await apiWrite('/api/customers', 'POST', { name });
+    await loadCustomers();
+    selectCustomer(saved.id);
+    const q = document.getElementById('cuQ'); if (q) q.focus();
+  } catch (e) { setMsg(e.message, false); c.adding = true; }
+}
+
+async function renameCustomer(field, value) {
+  const cust = current(); if (!cust) return;
+  const v = value.trim();
+  if (field === 'name' && !v) { document.getElementById('cuName').value = cust.name; return; }
+  if (v === (cust[field] || '')) return;
+  commit({ [field]: v }, { msg: field === 'name' ? 'Renamed' : 'Saved' });
+}
+
+// ---------- keyboard + typing (document-level; the shell's inputs persist) ----------
 document.addEventListener('input', (e) => {
-  if (e.target.dataset && e.target.dataset.dlAll) { e.stopPropagation(); return; }   // handled on 'change'
-  const side = e.target.dataset && e.target.dataset.dlFilter; if (!side) return;
-  e.stopPropagation();
-  custState().dl['q' + side] = e.target.value;
-  paintDual();
-}, true);
+  const c = custState(); const id = e.target.id;
+  if (id === 'cuQ') { c.q = e.target.value; c.qi = 0; paintResults(); }
+  else if (id === 'cuMq') { c.mq = e.target.value; c.mi = 0; c.mOpen = true; paintMemberSuggestions(); }
+});
 document.addEventListener('change', (e) => {
-  if (e.target.dataset && e.target.dataset.dlFilter) { e.stopPropagation(); return; }   // a filter isn't an edit
-  const side = e.target.dataset && e.target.dataset.dlAll; if (!side) return;
-  e.stopPropagation();
-  const dl = custState().dl; const shown = dlShownKeys(side);
-  const key = 'sel' + side;
-  dl[key] = e.target.checked ? new Set([...dl[key], ...shown]) : new Set([...dl[key]].filter((k) => !shown.includes(k)));
-  paintSelection(side);
-}, true);
-document.addEventListener('click', (e) => {
-  const row = e.target.closest && e.target.closest('#cuDual .dl-item');
-  if (!row || e.target.closest('.dl-move')) return;
-  dlSelect(row.dataset.side, row.dataset.key, e.shiftKey);
+  if (e.target.id === 'cuName') renameCustomer('name', e.target.value);
+  else if (e.target.id === 'cuDesc') renameCustomer('description', e.target.value);
 });
-document.addEventListener('dblclick', (e) => {
-  const row = e.target.closest && e.target.closest('#cuDual .dl-item');
-  if (row && !e.target.closest('.dl-move')) dlMove(row.dataset.side, [row.dataset.key]);
+document.addEventListener('focusin', (e) => {
+  if (e.target.id === 'cuMq') { custState().mOpen = true; paintMemberSuggestions(); }
 });
+document.addEventListener('focusout', (e) => {
+  if (e.target.id === 'cuMq') { custState().mOpen = false; paintMemberSuggestions(); }
+  // Swap just the input back (a full re-render here would swallow a click on another group).
+  if (e.target.id === 'cuNew' && !e.target.value.trim() && custState().list.length) {
+    custState().adding = false;
+    e.target.outerHTML = '<button class="cu-addg" data-act="cust-new">+ New group</button>';
+  }
+});
+// Keep focus in the search field while clicking an option, so the list stays open.
+// Clicking anywhere else closes the panel results.
+document.addEventListener('mousedown', (e) => {
+  if (!e.target.closest) return;
+  if (e.target.closest('.cu-pop')) { e.preventDefault(); return; }
+  const c = custState(); const q = document.getElementById('cuQ');
+  if (q && c.q && e.target !== q) { closeSearch(); paintResults(); }
+});
+document.addEventListener('toggle', (e) => { if (e.target.classList && e.target.classList.contains('cu-chan')) custState().chanOpen = e.target.open; }, true);
+
 document.addEventListener('keydown', (e) => {
-  const row = e.target.closest && e.target.closest('#cuDual .dl-item'); if (!row) return;
-  const { side, key } = row.dataset;
-  if (e.key === ' ') { e.preventDefault(); dlSelect(side, key, e.shiftKey); }
-  else if (e.key === 'Enter') {
-    e.preventDefault();
-    const c = custState(); const items = side === 'L' ? dlModel(c).available : dlModel(c).chosen;
-    const picked = DualList.visibleSelected(items, c.dl['sel' + side], c.dl['q' + side]).map((i) => i.key);
-    const idx = [...row.parentElement.children].indexOf(row);
-    dlMove(side, picked.includes(key) ? picked : [key]);   // Enter on a selected row moves the whole selection
-    const rows = document.querySelectorAll(`#dlList${side} .dl-item`);   // keep keyboard users in the list
-    if (rows.length) rows[Math.min(idx, rows.length - 1)].focus();
-  } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-    e.preventDefault();
-    const sib = e.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
-    if (sib && sib.classList.contains('dl-item')) { sib.focus(); if (e.shiftKey) dlSelect(side, sib.dataset.key, true); }
+  const c = custState(); const id = e.target.id;
+  if (id === 'cuNew') {
+    if (e.key === 'Enter' && e.target.value.trim()) { e.preventDefault(); createCustomer(e.target.value.trim()); }
+    else if (e.key === 'Escape' && c.list.length) { c.adding = false; renderSettings(); }
+    return;
+  }
+  if (id === 'cuName' || id === 'cuDesc') {
+    if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+    else if (e.key === 'Escape') { const cust = current(); e.target.value = id === 'cuName' ? cust.name : cust.description; e.target.blur(); }
+    return;
+  }
+  if (id === 'cuQ') {
+    const n = searchResult().shown;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); if (!n) return;
+      c.qi = (c.qi + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+      paintResults();
+      const opt = document.getElementById('cuOpt' + c.qi); if (opt) opt.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter' && n) {
+      e.preventDefault();
+      const opt = document.getElementById('cuOpt' + c.qi); if (opt) customersAction('cust-toggle', opt);
+    } else if (e.key === 'Escape' && c.q) { e.preventDefault(); c.q = ''; e.target.value = ''; paintResults(); }
+    return;
+  }
+  if (id === 'cuMq') {
+    const n = memberSuggestions().length;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); if (!n) return;
+      c.mOpen = true; c.mi = (c.mi + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+      paintMemberSuggestions();
+    } else if (e.key === 'Enter' && n) { e.preventDefault(); addMemberAt(c.mi); }
+    else if (e.key === 'Escape') { e.preventDefault(); c.mq = ''; e.target.value = ''; c.mOpen = false; paintMemberSuggestions(); }
   }
 });
 

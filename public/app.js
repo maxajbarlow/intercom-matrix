@@ -1444,7 +1444,7 @@ function renderSettings() {
       </div>
     </div>`;
 
-  if (sec === 'customers') paintDual();   // public/customers.js fills the picker lists
+  if (sec === 'customers') paintCustomers();   // public/customers.js fills the lists
 
   // The Systems detail embeds the print version/diff UI (dynamic ids) — re-cache
   // its elements, re-bind drag-drop, and render the selected system's versions.
