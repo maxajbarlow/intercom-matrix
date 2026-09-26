@@ -117,7 +117,7 @@ main { flex: 1; min-height: 0; display: flex; }
 .xlink:hover { border-bottom-color: currentColor; }
 
 /* ---- split (conferences / panels) ---- */
-.split { flex: 1; min-height: 0; display: grid; grid-template-columns: 320px 1fr; }
+.split { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(300px, 26vw, 460px) 1fr; }
 .list { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; background: var(--surface); }
 .list input[type=search] { margin: 12px; background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--text); border-radius: 8px; padding: 9px 11px; font: inherit; }
 .list .sort-row { display: flex; align-items: center; gap: 8px; margin: 0 12px 8px; font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .5px; }
@@ -126,7 +126,7 @@ main { flex: 1; min-height: 0; display: flex; }
 .list li { padding: 9px 14px; cursor: pointer; border-left: 3px solid transparent; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .list li:hover { background: var(--surface-2); }
 .list li.active { background: var(--surface-2); border-left-color: var(--accent); }
-.list li .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list li .nm { min-width: 0; overflow-wrap: anywhere; }   /* wrap, never cut a name off */
 .list li .badge { color: var(--text-dim); font-size: 11px; background: var(--surface-3); border-radius: 10px; padding: 1px 8px; flex: none; }
 .list li .badge.group { color: var(--listen); }
 
@@ -135,7 +135,7 @@ main { flex: 1; min-height: 0; display: flex; }
 .detail h2 { margin: 0 0 2px; font-size: 19px; }
 .detail .meta { color: var(--text-dim); font-size: 12px; margin-bottom: 18px; }
 .detail .meta .tag { background: var(--surface-3); border-radius: 6px; padding: 2px 8px; margin-right: 6px; }
-table.members { border-collapse: collapse; width: 100%; max-width: 760px; }
+table.members { border-collapse: collapse; width: 100%; max-width: 1100px; }
 table.members th { text-align: left; color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; padding: 6px 10px; border-bottom: 1px solid var(--border-strong); }
 table.members td { padding: 7px 10px; border-bottom: 1px solid var(--border); }
 table.members tr:hover td { background: var(--surface-2); }
