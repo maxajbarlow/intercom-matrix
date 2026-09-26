@@ -10,16 +10,20 @@
 // app.js globals it uses (state, esc, api, apiWrite, secHead, saveBar, setMsg,
 // renderSettings, loadUsers) exist by the time any of it runs.
 
-/* global state, esc, api, apiWrite, secHead, saveBar, setMsg, renderSettings, loadUsers */
+/* global state, esc, api, apiWrite, secHead, saveBar, setMsg, renderSettings, loadUsers, markSettingsDirty, DualList */
 
 const CUST_NEW = '__new__';
 const custKey = (sys, addr) => sys + '\u0000' + addr;
 const PREVIEW_DEBOUNCE_MS = 250;
 
 function custState() {
-  if (!state.cust) state.cust = { list: null, sel: null, draft: null, sys: null, panels: {}, preview: null, onlySel: false };
+  if (!state.cust) state.cust = { list: null, sel: null, draft: null, sys: null, panels: {}, preview: null, dl: freshDl() };
   return state.cust;
 }
+
+// Picker UI state: a filter + multi-selection per pane (L = available, R = the
+// group) and the shift-click anchor. Reset whenever the customer or system changes.
+const freshDl = () => ({ qL: '', qR: '', selL: new Set(), selR: new Set(), anchorL: null, anchorR: null });
 
 async function loadCustomers() {
   const c = custState();
@@ -139,26 +143,139 @@ function custPanelPicker(c) {
   const panels = c.panels[c.sys];
   if (!panels) return '<div class="sec-empty">Loading panels…</div>';
   if (!panels.length) return '<div class="sec-empty">This system has no panel data yet — upload a config print first.</div>';
-  const d = c.draft;
-  // Selected sources that no longer exist in the current data (renamed/removed).
-  const present = new Set(panels.flatMap((p) => [p.addr, p.name]));
-  const missing = [...d.sources.values()].filter((s) => s.system === c.sys && !present.has(s.addr) && !present.has(s.name));
-  const list = panels.map((p) => {
-    const on = d.sources.has(custKey(c.sys, p.addr)) || [...d.sources.values()].some((s) => s.system === c.sys && s.name === p.name);
-    const confs = (p.memberships || []).length;
-    return `<label class="cu-panel${on ? ' on' : ''}" data-q="${esc((p.name + ' ' + p.addr).toLowerCase())}">
-      <input type="checkbox" data-act="cust-src" data-addr="${esc(p.addr)}" data-name="${esc(p.name)}"${on ? ' checked' : ''} />
-      <span class="cu-panel-tx"><b>${esc(p.name)}</b>${p.addr !== p.name ? `<span>${esc(p.addr)}</span>` : ''}</span>
-      <span class="cu-panel-n" title="${confs} conference${confs === 1 ? '' : 's'}">${confs}</span>
-    </label>`;
-  }).join('');
+  const dl = c.dl;
+  const pane = (side, title, sub, q, ph) => `
+    <div class="dl-pane dl-${side}">
+      <div class="dl-head">
+        <input type="checkbox" class="dl-all" data-dl-all="${side}" aria-label="Select all shown in ${title}" title="Select all shown" />
+        <div class="dl-title"><b>${title}</b><span>${sub}</span></div>
+        <span class="dl-count" id="dlCount${side}"></span>
+      </div>
+      <input class="dl-filter" type="search" data-dl-filter="${side}" value="${esc(q)}" placeholder="${ph}" aria-label="${ph}" autocomplete="off" spellcheck="false" />
+      <ul class="dl-list" id="dlList${side}" role="listbox" aria-multiselectable="true" aria-label="${title}"></ul>
+    </div>`;
   return `
-    <div class="cu-tools">
-      <input id="cuSearch" class="cu-search" type="search" placeholder="Filter panels…" aria-label="Filter panels" autocomplete="off" />
-      <label class="cu-only"><input type="checkbox" id="cuOnlySel"${c.onlySel ? ' checked' : ''} /> Selected only</label>
+    <div class="xfer" id="cuDual">
+      ${pane('L', 'Available', 'Panels on this system', dl.qL, 'Filter available…')}
+      <div class="dl-mid" role="group" aria-label="Move panels">
+        <button class="btn dl-btn primary" data-act="cust-dl-add" id="dlAdd"></button>
+        <button class="btn dl-btn" data-act="cust-dl-addall" id="dlAddAll"></button>
+        <span class="dl-sep" aria-hidden="true"></span>
+        <button class="btn dl-btn" data-act="cust-dl-rm" id="dlRm"></button>
+        <button class="btn dl-btn" data-act="cust-dl-rmall" id="dlRmAll"></button>
+      </div>
+      ${pane('R', 'Active group', 'Source panels for this customer', dl.qR, 'Filter group…')}
     </div>
-    ${missing.length ? `<div class="cu-warn">⚠ ${missing.length} source panel${missing.length === 1 ? '' : 's'} not in the current data: ${missing.map((s) => `<b>${esc(s.name)}</b> <button class="cu-x" data-act="cust-src-drop" data-addr="${esc(s.addr)}" title="Remove">✕</button>`).join(', ')}</div>` : ''}
-    <div class="cu-panels${c.onlySel ? ' only-sel' : ''}" id="cuPanels">${list}</div>`;
+    <p class="dl-hint">Click to select · <kbd>Shift</kbd>-click for a range · double-click, <kbd>Enter</kbd> or a row's arrow moves it across.</p>`;
+}
+
+// ---------- dual-list paint (no full re-render: keeps filter focus + scroll) ----------
+function dlModel(c) {
+  const sources = [...c.draft.sources.values()].filter((s) => s.system === c.sys);
+  return DualList.splitSources(c.panels[c.sys] || [], sources);
+}
+function dlRow(item, side, selected) {
+  const n = (item.memberships || []).length;
+  const sub = item.missing ? '<span class="dl-warn">not in the current print</span>' : (item.addr !== item.name ? `<span>${esc(item.addr)}</span>` : '');
+  const verb = side === 'L' ? 'Add' : 'Remove';
+  return `<li class="dl-item${selected ? ' sel' : ''}${item.missing ? ' missing' : ''}" role="option" aria-selected="${selected}" tabindex="0" data-side="${side}" data-key="${esc(item.key)}">
+    <span class="dl-check" aria-hidden="true"></span>
+    <span class="dl-tx"><b>${esc(item.name)}</b>${sub}</span>
+    ${item.missing ? '' : `<span class="dl-n" title="${n} conference${n === 1 ? '' : 's'}">${n}</span>`}
+    <button class="dl-move" data-act="cust-dl-one" data-side="${side}" data-key="${esc(item.key)}" tabindex="-1" title="${verb} ${esc(item.name)}" aria-label="${verb} ${esc(item.name)}">${side === 'L' ? '→' : '←'}</button>
+  </li>`;
+}
+function paintList(side, items, q, sel) {
+  const ul = document.getElementById('dlList' + side); if (!ul) return;
+  const shown = items.filter((i) => DualList.matches(i, q));
+  const empty = items.length
+    ? 'Nothing matches the filter.'
+    : (side === 'L' ? 'Every panel is in the group.' : 'No source panels yet — add some from the left.');
+  ul.innerHTML = shown.length ? shown.map((i) => dlRow(i, side, sel.has(i.key))).join('') : `<li class="dl-empty">${empty}</li>`;
+}
+// Counts + select-all state for one pane (touches no rows).
+function paintPaneControls(side, items, q, sel) {
+  const shown = items.filter((i) => DualList.matches(i, q));
+  const count = document.getElementById('dlCount' + side);
+  if (count) count.textContent = q ? `${shown.length} of ${items.length}` : String(items.length);
+  const all = document.querySelector(`[data-dl-all="${side}"]`);
+  if (all) {
+    const nSel = shown.filter((i) => sel.has(i.key)).length;
+    all.checked = shown.length > 0 && nSel === shown.length;
+    all.indeterminate = nSel > 0 && nSel < shown.length;
+    all.disabled = !shown.length;
+  }
+  return shown;
+}
+function setBtn(id, label, n) {
+  const b = document.getElementById(id); if (!b) return;
+  b.textContent = label; b.disabled = !n;
+}
+// Full paint: rebuild both lists (after a move or a filter change), then controls.
+function paintDual() {
+  if (!document.getElementById('cuDual')) return;
+  const c = custState(); const dl = c.dl;
+  const { available, chosen } = dlModel(c);
+  paintList('L', available, dl.qL, dl.selL);
+  paintList('R', chosen, dl.qR, dl.selR);
+  paintControls();
+}
+// Light paint: selection changed — flip row state in place (the row elements
+// survive, so double-click and keyboard focus keep working), then controls.
+function paintSelection(side) {
+  const sel = custState().dl['sel' + side];
+  for (const row of document.querySelectorAll(`#dlList${side} .dl-item`)) {
+    const on = sel.has(row.dataset.key);
+    row.classList.toggle('sel', on);
+    row.setAttribute('aria-selected', String(on));
+  }
+  paintControls();
+}
+function paintControls() {
+  const c = custState(); const dl = c.dl;
+  const { available, chosen } = dlModel(c);
+  const shownL = paintPaneControls('L', available, dl.qL, dl.selL);
+  const shownR = paintPaneControls('R', chosen, dl.qR, dl.selR);
+  const nAdd = DualList.visibleSelected(available, dl.selL, dl.qL).length;
+  const nRm = DualList.visibleSelected(chosen, dl.selR, dl.qR).length;
+  setBtn('dlAdd', nAdd ? `Add ${nAdd} selected →` : 'Add selected →', nAdd);
+  setBtn('dlAddAll', dl.qL ? `Add all ${shownL.length} matching ⇉` : `Add all ${shownL.length} ⇉`, shownL.length);
+  setBtn('dlRm', nRm ? `← Remove ${nRm} selected` : '← Remove selected', nRm);
+  setBtn('dlRmAll', dl.qR ? `⇇ Remove all ${shownR.length} matching` : `⇇ Remove all ${shownR.length}`, shownR.length);
+  // keep the per-system tab badges + total in step with the draft
+  const total = document.querySelector('.cu-total'); if (total) total.textContent = `${c.draft.sources.size} selected`;
+  for (const tab of document.querySelectorAll('.cu-systab')) {
+    const n = [...c.draft.sources.values()].filter((x) => x.system === tab.dataset.sys).length;
+    let badge = tab.querySelector('.cu-count');
+    if (n && !badge) { badge = document.createElement('span'); badge.className = 'cu-count'; tab.appendChild(badge); }
+    if (badge) { if (n) badge.textContent = String(n); else badge.remove(); }
+  }
+}
+
+// Move the given keys across. side 'L' = add to the group, 'R' = remove from it.
+function dlMove(side, keys) {
+  const c = custState(); const d = c.draft; if (!d || !keys.length) return;
+  const dl = c.dl; const move = new Set(keys);
+  const { available, chosen } = dlModel(c);
+  if (side === 'L') {
+    for (const p of available) if (move.has(p.key)) d.sources.set(custKey(c.sys, p.addr), { system: c.sys, addr: p.addr, name: p.name });
+    dl.selL = new Set([...dl.selL].filter((k) => !move.has(k)));
+  } else {
+    for (const it of chosen) if (move.has(it.key)) d.sources.delete(custKey(c.sys, it.source.addr));
+    dl.selR = new Set([...dl.selR].filter((k) => !move.has(k)));
+  }
+  paintDual(); refreshPreview(); markSettingsDirty();
+}
+function dlShownKeys(side) {
+  const c = custState(); const { available, chosen } = dlModel(c);
+  return (side === 'L' ? available : chosen).filter((i) => DualList.matches(i, side === 'L' ? c.dl.qL : c.dl.qR)).map((i) => i.key);
+}
+function dlSelect(side, key, extendRange) {
+  const dl = custState().dl;
+  const selKey = 'sel' + side, anchorKey = 'anchor' + side;
+  if (extendRange && dl[anchorKey]) dl[selKey] = new Set([...dl[selKey], ...DualList.range(dlShownKeys(side), dl[anchorKey], key)]);
+  else { dl[selKey] = DualList.toggle(dl[selKey], key); dl[anchorKey] = key; }
+  paintSelection(side);
 }
 
 function custUserPicker(d) {
@@ -223,6 +340,7 @@ function selectCustomer(id) {
   c.sel = id;
   c.draft = draftFrom(id === CUST_NEW ? null : c.list.find((x) => x.id === id));
   c.preview = null;
+  c.dl = freshDl();
   const first = c.draft.sources.size ? [...c.draft.sources.values()][0].system : null;
   if (first) c.sys = first;
   refreshPreview();
@@ -245,20 +363,15 @@ async function customersAction(act, el) {
   syncDraftFields();
   if (act === 'cust-select') { selectCustomer(Number(el.dataset.cust)); renderSettings(); return; }
   if (act === 'cust-new') { selectCustomer(CUST_NEW); renderSettings(); return; }
-  if (act === 'cust-sys') { c.sys = el.dataset.sys; c.preview = null; await ensurePanels(c.sys); renderSettings(); refreshPreview(); return; }
+  if (act === 'cust-sys') { c.sys = el.dataset.sys; c.preview = null; c.dl = freshDl(); await ensurePanels(c.sys); renderSettings(); refreshPreview(); return; }
   if (!c.draft) return;
   const d = c.draft;
 
-  if (act === 'cust-src') {
-    const k = custKey(c.sys, el.dataset.addr);
-    if (el.checked) d.sources.set(k, { system: c.sys, addr: el.dataset.addr, name: el.dataset.name });
-    else for (const [key, s] of d.sources) if (key === k || (s.system === c.sys && s.name === el.dataset.name)) d.sources.delete(key);
-    el.closest('.cu-panel').classList.toggle('on', el.checked);
-    const total = document.querySelector('.cu-total'); if (total) total.textContent = `${d.sources.size} selected`;
-    refreshPreview();
-    return;
-  }
-  if (act === 'cust-src-drop') { d.sources.delete(custKey(c.sys, el.dataset.addr)); renderSettings(); refreshPreview(); return; }
+  if (act === 'cust-dl-one') { dlMove(el.dataset.side, [el.dataset.key]); return; }
+  if (act === 'cust-dl-add') { dlMove('L', DualList.visibleSelected(dlModel(c).available, c.dl.selL, c.dl.qL).map((i) => i.key)); return; }
+  if (act === 'cust-dl-rm') { dlMove('R', DualList.visibleSelected(dlModel(c).chosen, c.dl.selR, c.dl.qR).map((i) => i.key)); return; }
+  if (act === 'cust-dl-addall') { dlMove('L', dlShownKeys('L')); return; }
+  if (act === 'cust-dl-rmall') { dlMove('R', dlShownKeys('R')); return; }
   if (act === 'cust-user') {
     if (el.checked) d.users.add(el.dataset.user);
     else for (const u of [...d.users]) if (u.toLowerCase() === el.dataset.user.toLowerCase()) d.users.delete(u);
@@ -284,16 +397,52 @@ async function customersAction(act, el) {
   }
 }
 
-// Panel filter + "selected only" — pure DOM toggles, no re-render (keeps focus/scroll).
+// ---------- dual-list pointer + keyboard (delegated; rows re-paint freely) ----------
+// Filters and select-all are handled in the CAPTURE phase and stopped there, so
+// the Settings panel's own input/change listeners don't mark the form dirty for
+// what is only a view filter.
 document.addEventListener('input', (e) => {
-  if (e.target.id !== 'cuSearch') return;
-  const q = e.target.value.trim().toLowerCase();
-  for (const row of document.querySelectorAll('#cuPanels .cu-panel')) row.classList.toggle('hidden-q', !!q && !row.dataset.q.includes(q));
-});
+  if (e.target.dataset && e.target.dataset.dlAll) { e.stopPropagation(); return; }   // handled on 'change'
+  const side = e.target.dataset && e.target.dataset.dlFilter; if (!side) return;
+  e.stopPropagation();
+  custState().dl['q' + side] = e.target.value;
+  paintDual();
+}, true);
 document.addEventListener('change', (e) => {
-  if (e.target.id !== 'cuOnlySel') return;
-  custState().onlySel = e.target.checked;
-  const box = document.getElementById('cuPanels'); if (box) box.classList.toggle('only-sel', e.target.checked);
+  if (e.target.dataset && e.target.dataset.dlFilter) { e.stopPropagation(); return; }   // a filter isn't an edit
+  const side = e.target.dataset && e.target.dataset.dlAll; if (!side) return;
+  e.stopPropagation();
+  const dl = custState().dl; const shown = dlShownKeys(side);
+  const key = 'sel' + side;
+  dl[key] = e.target.checked ? new Set([...dl[key], ...shown]) : new Set([...dl[key]].filter((k) => !shown.includes(k)));
+  paintSelection(side);
+}, true);
+document.addEventListener('click', (e) => {
+  const row = e.target.closest && e.target.closest('#cuDual .dl-item');
+  if (!row || e.target.closest('.dl-move')) return;
+  dlSelect(row.dataset.side, row.dataset.key, e.shiftKey);
+});
+document.addEventListener('dblclick', (e) => {
+  const row = e.target.closest && e.target.closest('#cuDual .dl-item');
+  if (row && !e.target.closest('.dl-move')) dlMove(row.dataset.side, [row.dataset.key]);
+});
+document.addEventListener('keydown', (e) => {
+  const row = e.target.closest && e.target.closest('#cuDual .dl-item'); if (!row) return;
+  const { side, key } = row.dataset;
+  if (e.key === ' ') { e.preventDefault(); dlSelect(side, key, e.shiftKey); }
+  else if (e.key === 'Enter') {
+    e.preventDefault();
+    const c = custState(); const items = side === 'L' ? dlModel(c).available : dlModel(c).chosen;
+    const picked = DualList.visibleSelected(items, c.dl['sel' + side], c.dl['q' + side]).map((i) => i.key);
+    const idx = [...row.parentElement.children].indexOf(row);
+    dlMove(side, picked.includes(key) ? picked : [key]);   // Enter on a selected row moves the whole selection
+    const rows = document.querySelectorAll(`#dlList${side} .dl-item`);   // keep keyboard users in the list
+    if (rows.length) rows[Math.min(idx, rows.length - 1)].focus();
+  } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const sib = e.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
+    if (sib && sib.classList.contains('dl-item')) { sib.focus(); if (e.shiftKey) dlSelect(side, sib.dataset.key, true); }
+  }
 });
 
 // ---------- scoped-viewer badge (header) ----------
