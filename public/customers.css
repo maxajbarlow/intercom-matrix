@@ -110,6 +110,23 @@
 .cu-chlist { list-style: none; margin: 0 0 8px; padding: 0; max-height: 320px; overflow-y: auto; }
 .cu-chlist li { font-size: 11.5px; padding: 2px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* "view as" — Preview button, per-member eye, and the app-wide banner */
+.cu-view { display: inline-flex; align-items: center; gap: 6px; }
+.cu-eye { display: grid; place-items: center; }
+.cu-eye:hover { color: var(--both); background: color-mix(in srgb, var(--both) 14%, transparent); }
+.usr .iconbtn svg { display: block; margin: auto; }
+.usr-nopreview { visibility: hidden; }   /* keeps the row's controls aligned for admins/editors */
+.viewas-bar { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 10px; padding: 7px 18px; font-size: 12.5px;
+  color: var(--text); background: color-mix(in srgb, var(--listen) 20%, var(--surface)); border-bottom: 1px solid color-mix(in srgb, var(--listen) 55%, transparent); }
+.viewas-bar[hidden] { display: none; }
+.viewas-bar > svg { flex: none; color: var(--listen); }
+.viewas-tx { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.viewas-ro { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .6px; color: var(--listen); }
+.viewas-exit { margin-left: auto; flex: none; padding: 5px 12px; border-radius: 7px; border: 0; font: inherit; font-weight: 700; cursor: pointer; color: #2b1c00; background: var(--listen); }
+.viewas-exit:hover { filter: brightness(1.08); }
+.viewas-exit:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+@media (max-width: 560px) { .viewas-ro { display: none; } }
+
 /* header badge for a scoped customer viewer */
 .scope-badge { display: inline-flex; align-items: center; gap: 7px; max-width: 280px; padding: 5px 11px; border-radius: 999px; font-size: 12px; font-weight: 600;
   color: var(--text); background: color-mix(in srgb, var(--both) 14%, var(--surface-2)); border: 1px solid color-mix(in srgb, var(--both) 40%, transparent);

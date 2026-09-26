@@ -25,6 +25,7 @@ const { buildWorkbookBuffer } = require('./lib/xlsx-export');
 const { currentUser, can, loginRequired } = require('./lib/identity');
 const customerDb = require('./lib/customer-db');
 const access = require('./lib/customer-access');
+const viewAs = require('./lib/view-as');
 const { resolveScope, filterPrintDiff } = require('./lib/customer-scope');
 
 const PORT = Number(process.env.PORT) || 8080;
@@ -67,6 +68,31 @@ app.use('/api', (req, res, next) => {
   const u = currentUser(req);
   if (u.source === 'session') return next();
   res.status(401).json({ error: 'Authentication required' });
+});
+
+// "View as" (lib/view-as) — an admin previews a customer viewer or group. The
+// target lives on the admin's session, so these check the REAL session role, not
+// currentUser() (which, mid-preview, is the viewer being previewed).
+app.post('/api/view-as', (req, res) => {
+  const token = authRouter._parseToken(req);
+  const session = authDb.getSession(token);
+  if (!session || session.role !== 'admin') return res.status(403).json({ error: '"view as" requires the admin role' });
+  try {
+    authDb.setViewAs(token, viewAs.validateTarget(authDb.getDb(), req.body));
+    res.json({ ok: true, viewAs: currentUser(req).viewAs });
+  } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+app.delete('/api/view-as', (req, res) => {
+  authDb.setViewAs(authRouter._parseToken(req), null);
+  res.json({ ok: true });
+});
+// The preview is read-only: nothing may be changed as (or on behalf of) the
+// previewed user. Every GET route is side-effect free, so blocking the rest is enough.
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.path === '/view-as' || req.path.startsWith('/auth/')) return next();
+  const u = currentUser(req);
+  if (!u.viewAs) return next();
+  res.status(403).json({ error: `Read-only while viewing as ${u.viewAs.label} — exit the preview to make changes`, viewAs: true });
 });
 
 const sysId = (req) => (req.query.system || req.body?.system || svc.defaultSystem());
