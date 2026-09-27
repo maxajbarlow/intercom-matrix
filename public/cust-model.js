@@ -27,12 +27,22 @@
   const sysNameOf = (systems, id) => ((systems || []).find((s) => s.id === id) || {}).name || id;
   const sysOrder = (systems, id) => { const i = (systems || []).findIndex((s) => s.id === id); return i < 0 ? Infinity : i; };
 
+  // The one panel whose name starts with `name`, or null when none or several
+  // do — re-finds a source saved from a print that truncated its name. Names
+  // only, never addresses. Mirrors lib/customer-scope.js (uniquePrefixMatch).
+  function uniquePrefixMatch(panels, name) {
+    if (!name) return null;
+    const hits = panels.filter((p) => p.name && p.name.startsWith(name));
+    return hits.length === 1 ? hits[0] : null;
+  }
+
   // Look a stored source up in a system's panels: address first, then name (so
-  // a panel renamed in the config tool still resolves).
+  // a panel renamed in the config tool still resolves), then a unique name prefix.
   function indexPanels(panels) {
+    const list = panels || [];
     const byAddr = new Map(), byNm = new Map();
-    for (const p of panels || []) { if (p.addr) byAddr.set(p.addr, p); if (p.name) byNm.set(p.name, p); }
-    return (s) => byAddr.get(s.addr) || byNm.get(s.name) || null;
+    for (const p of list) { if (p.addr) byAddr.set(p.addr, p); if (p.name) byNm.set(p.name, p); }
+    return (s) => byAddr.get(s.addr) || byNm.get(s.name) || uniquePrefixMatch(list, s.name);
   }
 
   // The group's sources as [{system, sysName, items}] in system order. Items are
