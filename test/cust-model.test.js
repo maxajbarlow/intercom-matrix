@@ -40,6 +40,20 @@ test('resolveSources: a source no longer in the print stays listed, flagged miss
   assert.equal(g.items[0].name, 'Old Desk');
 });
 
+test('resolveSources: a name saved from a truncated print resolves to the one panel it prefixes', () => {
+  const [g] = M.resolveSources(PANELS, SYSTEMS, [src('f1', 'Mercedes C'), src('f1', 'Ferrari Car')]);
+  const byName = Object.fromEntries(g.items.map((i) => [i.source.name, i]));
+  assert.equal(byName['Mercedes C'].name, 'Mercedes Car 1', 'unique prefix → live panel');
+  assert.ok(!byName['Mercedes C'].missing);
+  assert.equal(byName['Ferrari Car'].missing, true, 'Ferrari Car 2 or 10 — ambiguous');
+});
+
+test('search: a panel matched by name prefix is flagged as already added', () => {
+  const out = M.search(PANELS, SYSTEMS, [src('f1', 'Mercedes C')], 'mercedes');
+  assert.equal(out.groups[0].items[0].added, true);
+  assert.equal(out.groups[0].items[0].sourceKey, 'f1\u0000Mercedes C');
+});
+
 test('resolveSources: a source on an unknown system is kept under its system id', () => {
   const groups = M.resolveSources(PANELS, SYSTEMS, [src('gone', 'Desk')]);
   assert.equal(groups[0].system, 'gone');

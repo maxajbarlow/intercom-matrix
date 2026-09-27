@@ -71,6 +71,22 @@ test('resolveScope: matches by address first, falls back to name (renamed panel 
   assert.ok(byAddr.confNames.has('Stewards'));
 });
 
+test('resolveScope: a name saved from a truncated print matches the one panel it is a prefix of', () => {
+  // print-backed: addr === name, both saved while the print cut the name short
+  const s = resolveScope(snap(), [{ addr: 'SYS', name: 'SYS' }]);
+  assert.ok(s.confNames.has('SysOps'));
+  assert.deepStrictEqual(s.matchedSources.map((x) => x.name), ['SYS-1'], 'reported under the full name');
+  assert.equal(s.missingSources.length, 0);
+});
+
+test('resolveScope: an ambiguous prefix matches nothing, and prefixes never apply to addresses', () => {
+  const ambiguous = resolveScope(snap(), [{ addr: 'RC-', name: 'RC-' }]);
+  assert.equal(ambiguous.matchedSources.length, 0, 'RC- could be RC-1 or RC-2');
+  assert.deepStrictEqual(ambiguous.missingSources.map((x) => x.name), ['RC-']);
+  const addrOnly = resolveScope(snap(), [{ addr: '1.2', name: '' }]);
+  assert.equal(addrOnly.matchedSources.length, 0, '1.2 must not match port 1.2.1');
+});
+
 test('resolveScope: reports source panels not found in the current snapshot', () => {
   const s = resolveScope(snap(), [...FIA, { addr: '7.7.7', name: 'Gone' }]);
   assert.deepStrictEqual(s.missingSources.map((x) => x.name), ['Gone']);
