@@ -61,7 +61,7 @@
     status: null,                 // GET /api/onboarding
     adminDone: false,             // an admin account exists / was created
     sys: { name: 'Studio A', createdId: null, busy: false, result: null },
-    brand: { theme: null },       // chosen theme for live preview
+    brand: {},                    // typed site name / subtitle
     requireLogin: false,
     msgTimer: null,
   };
@@ -231,19 +231,12 @@
   function renderBranding(body, foot) {
     $('obKicker').textContent = 'Step 3 of 4';
     $('obTitle').textContent = 'Make it yours';
-    $('obSub').textContent = 'Optional — set the name and theme every viewer sees. Change any of this later in Settings.';
-    const curTheme = ob.brand.theme || document.documentElement.getAttribute('data-theme') || 'dark';
-    // Seed from state so a re-render (e.g. toggling the theme) keeps typed values.
+    $('obSub').textContent = 'Optional — set the name every viewer sees. Change any of this later in Settings.';
+    // Seed from state so a re-render keeps typed values.
     body.innerHTML = `
       <div class="ob-fields">
         <label class="ob-fld"><span>Site name</span><input id="obBrandName" value="${esc(ob.brand.name || '')}" placeholder="Intercom Matrix" /></label>
         <label class="ob-fld"><span>Subtitle</span><input id="obBrandSub" value="${esc(ob.brand.sub || '')}" placeholder="Intercom matrix" /></label>
-        <div class="ob-fld"><span>Theme</span>
-          <div class="ob-seg ob-theme-seg" id="obThemeSeg">
-            <div class="opt ${curTheme === 'dark' ? 'active' : ''}" data-ob="theme-dark"><div class="t">◐ Dark</div></div>
-            <div class="opt ${curTheme === 'light' ? 'active' : ''}" data-ob="theme-light"><div class="t">☀ Light</div></div>
-          </div>
-        </div>
       </div>`;
     foot.innerHTML = footHTML({ next: 'Continue', skip: 'Skip' });
   }
@@ -281,8 +274,6 @@
       'create-admin': createAdmin,
       'reveal-login': revealLogin,
       'pick-print': () => $('obPrintFile').click(),
-      'theme-dark': () => pickTheme('dark'),
-      'theme-light': () => pickTheme('light'),
       finish: finish,
     };
     if (handlers[act]) { e.preventDefault(); handlers[act](); }
@@ -404,25 +395,17 @@
     if ($('obBrandSub')) ob.brand.sub = $('obBrandSub').value.trim();
   }
 
-  function pickTheme(theme) {
-    captureBranding();                  // don't lose typed name/subtitle on re-render
-    ob.brand.theme = theme;
-    document.documentElement.setAttribute('data-theme', theme);  // live preview
-    render();
-  }
-
   async function finish() {
     const nb = $('obNext');
     try {
       if (nb) { nb.disabled = true; nb.innerHTML = '<span class="spin">◐</span> Finishing…'; }
       const requireLogin = !!($('obRequireLogin') || {}).checked;
-      // Persist branding/theme (if the user touched them) + the login wall choice,
+      // Persist branding (if the user touched them) + the login wall choice,
       // then stamp completion so the wizard never re-launches.
       const patch = { meta: { onboardedAt: new Date().toISOString() }, safety: { requireLogin } };
       const brand = {};
       if (ob.brand.name) brand.siteName = ob.brand.name;
       if (ob.brand.sub != null && ob.brand.sub !== '') brand.subtitle = ob.brand.sub;
-      if (ob.brand.theme) patch.display = { theme: ob.brand.theme };
       if (ob.sys.createdId) brand.defaultSystem = ob.sys.createdId;
       if (Object.keys(brand).length) patch.branding = brand;
       await sendJSON('/api/settings', 'PATCH', patch);

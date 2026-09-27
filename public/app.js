@@ -384,14 +384,14 @@ function applyRoute() {
   const sec = settingsSectionFromHash();
   if (sec) {
     if (state.view !== 'settings') viewBeforeSettings = state.view;
-    else if (state.setSection !== sec) applySettings();   // switching section reverts an unsaved theme preview
+    else if (state.setSection !== sec) applySettings();   // switching section re-applies the stored settings
     state.setSection = sec;
     document.body.classList.add('is-settings');
     showView('settings');
     const scroller = document.getElementById('view-settings'); if (scroller) scroller.scrollTop = 0;
   } else if (state.view === 'settings') {
     document.body.classList.remove('is-settings');
-    applySettings();   // restores the document title + any previewed theme
+    applySettings();   // restores the document title
     showView(viewBeforeSettings && viewBeforeSettings !== 'settings' ? viewBeforeSettings : 'matrix');
   }
 }
@@ -1363,9 +1363,7 @@ els.panelDetail.addEventListener('click', detailRequestClick);
 // --- settings wiring ---
 els.settingsWrap.addEventListener('click', (e) => {
   const nav = e.target.closest('[data-section]');
-  if (nav) return;   // section links are plain #settings/<key> anchors → applyRoute()  // applySettings reverts any unsaved theme preview
-  const seg = e.target.closest('[data-theme-pick]');
-  if (seg) { onThemePick(seg); return; }
+  if (nav) return;   // section links are plain #settings/<key> anchors → applyRoute()
   const b = e.target.closest('[data-act]'); if (!b) return;
   if (b.tagName === 'A') e.preventDefault();
   settingsAction(b.dataset.act, b);
@@ -1395,7 +1393,6 @@ renderWho();
 // ============================================================================
 // SETTINGS — shared deployment configuration (engineer-gated writes)
 // ============================================================================
-const SET_THEMES = [['dark', 'Dark'], ['light', 'Light']];
 const SET_VIEWS = [['matrix', 'Matrix'], ['conferences', 'Conferences'], ['panels', 'Panels'], ['requests', 'Requests'], ['workorder', 'Work order']];
 const SET_DATEFMT = [['short', 'Short (6/12/26)'], ['medium', 'Medium (12 Jun 2026)'], ['long', 'Long (June 12, 2026)']];
 const SET_ROLES = [['viewer', 'Viewer'], ['editor', 'Editor'], ['admin', 'Admin']];
@@ -1426,7 +1423,7 @@ function setMsg(text, ok) {
   if (text && ok) setTimeout(() => { if (el.textContent === text) { el.textContent = ''; el.className = 'set-msg'; } }, 2500);
 }
 
-// Persist a partial patch, refresh local copy, re-apply branding/theme, re-render.
+// Persist a partial patch, refresh local copy, re-apply branding, re-render.
 async function saveSettingsPatch(patch, okMsg) {
   try {
     state.settings = await apiWrite('/api/settings', 'PATCH', patch);
@@ -1442,7 +1439,7 @@ const setOpt = (pairs, cur) => pairs.map(([v, l]) => `<option value="${esc(v)}"$
 const SET_SECTIONS = [
   { key: 'systems', icon: '⛓', label: 'Systems', sub: 'Prints & topology' },
   { key: 'branding', icon: '✦', label: 'Branding', sub: 'Identity & logo' },
-  { key: 'display', icon: '◐', label: 'Display', sub: 'Defaults & theme' },
+  { key: 'display', icon: '◐', label: 'Display', sub: 'Defaults' },
   { key: 'safety', icon: '⌁', label: 'Access', sub: 'Login wall · setup' },
   { key: 'users', icon: '⚇', label: 'Users', sub: 'Accounts & SSO' },
   { key: 'customers', icon: '◎', label: 'Customers', sub: 'Scoped channel views' },
@@ -1678,12 +1675,9 @@ function secBranding(s, eng, dis, sysList) {
 }
 
 function secDisplay(s, eng, dis) {
-  const seg = (cur) => SET_THEMES.map(([v, l]) =>
-    `<button class="seg-btn${v === cur ? ' active' : ''}" data-theme-pick="${v}"${dis}>${l}</button>`).join('');
   return `${secHead('Display defaults', 'Applied to every client on first load. Each viewer can still override in-session from the header.')}
     <div class="sec-body">
       <label class="fl fl-narrow"><span>Date format</span><select id="stDateFmt"${dis}>${setOpt(SET_DATEFMT, s.display.dateFormat)}</select></label>
-      <div class="fl"><span>Theme</span><div class="seg" id="stThemeSeg" data-theme="${esc(s.display.theme)}">${seg(s.display.theme)}</div></div>
       <div class="tgl-group">
         ${tgl('stPanelsOnly', s.display.matrixPanelsOnly, 'Matrix opens to panels only', 'Hide non-panel ports by default', dis)}
       </div>
@@ -1896,7 +1890,6 @@ async function settingsAction(act, ctx) {
     }
     if (act === 'save-display') {
       const d = {
-        theme: (W.querySelector('#stThemeSeg') || {}).dataset?.theme || 'dark',
         dateFormat: W.querySelector('#stDateFmt').value,
         matrixPanelsOnly: W.querySelector('#stPanelsOnly').checked,
       };
@@ -2052,17 +2045,6 @@ function onLogoFile(file) {
   reader.readAsDataURL(file);
 }
 
-// Theme segmented control: highlight the pick, live-preview the page, mark dirty.
-// (Switching sections or reloading without saving reverts to the stored theme.)
-function onThemePick(btn) {
-  if (btn.disabled) return;
-  const seg = btn.closest('.seg');
-  seg.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b === btn));
-  seg.dataset.theme = btn.dataset.themePick;
-  document.documentElement.setAttribute('data-theme', btn.dataset.themePick);
-  markSettingsDirty();
-}
-
 // Enable the active section's Save button + flag unsaved state.
 function markSettingsDirty() {
   const panel = document.getElementById('setPanel'); if (!panel) return;
@@ -2109,12 +2091,11 @@ function applyLogo(uri) {
   }
 }
 
-// Apply shared settings to the UI. Theme + branding are safe to re-apply
+// Apply shared settings to the UI. Branding is safe to re-apply
 // any time; `boot` also seeds the per-session matrix controls and the
 // landing view/system (so a later save doesn't yank the user's current view).
 function applySettings(boot) {
   const s = state.settings; if (!s) return;
-  document.documentElement.setAttribute('data-theme', s.display.theme || 'dark');
   document.title = s.branding.siteName || 'Intercom Matrix';
   const h1 = document.querySelector('.brand h1'); if (h1) h1.textContent = s.branding.siteName || 'Intercom Matrix';
   applyLogo(s.branding.logoDataUri);

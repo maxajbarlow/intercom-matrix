@@ -1,38 +1,33 @@
 /* all-systems.css — the "All systems" view: per-system colours (chips + row
-   bands), the "matched across systems" column marker, and the system chooser.
-   Built on the styles.css tokens so it follows the theme. */
+   bands), the "matched across systems" column marker, and the system chooser. */
 
 :root {
-  --sys-0: #7c4dff; --sys-1: #26c6da; --sys-2: #ffab40;
-  --sys-3: #66bb6a; --sys-4: #f06292; --sys-5: #5c9dff;
+  --sys-0: #6a4fd8; --sys-1: #0f8a99; --sys-2: #c77700;
+  --sys-3: #2e7d32; --sys-4: #c2185b; --sys-5: #2f5bd3;
 }
 
 /* system chips */
-.sys-chip { display: inline-flex; align-items: center; max-width: 12em; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 700;
-  line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
-  color: var(--text); --c: var(--sys-0); background: color-mix(in srgb, var(--c) 22%, transparent); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
+.sys-chip { display: inline-block; max-width: 12em; padding: 0 5px; border-radius: 3px; font-size: 10px; font-weight: 600; line-height: 16px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
+  --c: var(--sys-0); color: var(--c); border: 1px solid var(--c); }
 .sys-0 { --c: var(--sys-0); } .sys-1 { --c: var(--sys-1); } .sys-2 { --c: var(--sys-2); }
 .sys-3 { --c: var(--sys-3); } .sys-4 { --c: var(--sys-4); } .sys-5 { --c: var(--sys-5); }
 .sys-chips { display: inline-flex; flex-wrap: wrap; gap: 3px; justify-content: flex-end; margin-left: auto; }
 .list li .sys-chips + .badge { margin-left: 0; }
 
 /* matrix: a coloured band on each row header groups rows by system … */
-.grid .rowhead.sys-row { box-shadow: inset 3px 0 0 var(--c); }
-/* … and a cyan bar under a column that's matched across systems (the header is
+.grid .rowhead.sys-row { box-shadow: inset 2px 0 0 var(--c); }
+/* … and a bar under a column that's matched across systems (the header is
    rotated 180°, so the inset TOP shadow lands visually at the bottom edge) */
-.grid .colhead.matched { box-shadow: inset 0 3px 0 var(--both); }
+.grid .colhead.matched { box-shadow: inset 0 2px 0 var(--both); }
 
 /* conference detail: "matched across N systems" + real names per system */
 .matched-tag { color: var(--both); }
-table.members.sys-names { margin-bottom: 18px; max-width: 640px; }
+table.members.sys-names { margin-bottom: 16px; max-width: 640px; }
 
 /* system chooser (raise a request on which system?) */
-.sys-menu { position: absolute; z-index: 60; width: 260px; padding: 6px; border-radius: 12px; border: 1px solid var(--border-strong);
-  background: var(--surface); box-shadow: 0 18px 40px -12px rgb(0 0 0 / .5); animation: sys-menu-in .14s cubic-bezier(.16, 1, .3, 1); }
-.sys-menu-h { padding: 6px 8px 8px; font-size: 11px; color: var(--text-dim); }
-.sys-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 8px; background: none;
-  color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.sys-menu { position: absolute; z-index: 60; width: 260px; padding: 4px; border-radius: 4px; border: 1px solid var(--border-strong); background: var(--surface); }
+.sys-menu-h { padding: 4px 8px 6px; font-size: 12px; color: var(--text-dim); }
+.sys-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: 3px; background: none; font-size: 12px; text-align: left; cursor: pointer; }
 .sys-menu button span:last-child { min-width: 0; overflow-wrap: anywhere; color: var(--text-dim); }
 .sys-menu button:hover, .sys-menu button:focus-visible { background: var(--surface-2); outline: none; }
-@keyframes sys-menu-in { from { opacity: 0; transform: translateY(-4px); } }
-@media (prefers-reduced-motion: reduce) { .sys-menu { animation: none; } }
