@@ -16,6 +16,8 @@ const els = {
   mxPanelsOnly: document.getElementById('mxPanelsOnly'),
   mxGrid: document.getElementById('mxGrid'),
   mxHint: document.getElementById('mxHint'),
+  mxSys: document.getElementById('mxSys'),
+  pnSys: document.getElementById('pnSys'),
   mxNode: document.getElementById('mxNode'),
   mxCard: document.getElementById('mxCard'),
   topoFile: document.getElementById('topoFile'),
@@ -65,6 +67,23 @@ const COL_W = 26, ROW_H = 22, ROWHEAD_W = 260, COLHEAD_H = 156, MAX_GRID = 1500;
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const cls = (t, l) => (t && l ? 'both' : t ? 'talk' : l ? 'listen' : '');
 const sym = (t, l) => (t && l ? '⊗' : t ? '●' : l ? '○' : '');
+
+// ---------- names: a conference shows its alias, the long name is an instant hover ----------
+// (public/names.js picks the name, public/tooltip.js shows any data-tip.) Panels
+// only have a long name, so they show it and repeat it on hover — the lists and
+// the matrix row heads cut long ones off.
+const tipAttr = (text) => (text ? ` data-tip="${esc(text)}"` : '');
+const panelTip = (name, ...extra) => [name, ...extra].filter(Boolean).join('\n');
+// d: { name, label }; extra: further hover lines (member count, systems, …)
+const confNameHtml = (d, ...extra) => `<span class="nm"${tipAttr(Names.tip(d, ...extra))}>${esc(Names.short(d))}</span>`;
+const panelNameHtml = (name, ...extra) => `<span class="nm"${tipAttr(panelTip(name, ...extra))}>${esc(name)}</span>`;
+// The alias of a conference known only by its long name (requests, work order, composer).
+let aliasCache = { data: null, idx: null };
+function confAlias(name, system) {
+  if (aliasCache.data !== state.data) aliasCache = { data: state.data, idx: Names.aliasIndex(state.data) };
+  return Names.aliasOf(aliasCache.idx, name, system);
+}
+const confNameByName = (name, system, label) => confNameHtml({ name, label: label || confAlias(name, system) });
 function fmtDateTime(t) {
   if (!t) return '—';
   const fmt = (state.settings && state.settings.display && state.settings.display.dateFormat) || 'medium';
@@ -104,7 +123,8 @@ function setStatus(s) {
   els.statusText.innerHTML = ok ? ''
     : `<span class="dotind" style="background:var(--text-dim)"></span>${esc((s && s.error) || 'no data')}`;
   if (ok && s.counts) {
-    els.countText.textContent = `${s.counts.panels} panels · ${s.counts.conferences} conferences · ${s.counts.memberEdges} memberships`;
+    const matched = s.source === 'combined' ? ` · ${s.counts.matchedConferences} matched across systems` : '';
+    els.countText.textContent = `${s.counts.panels} panels · ${s.counts.conferences} conferences${matched} · ${s.counts.memberEdges} memberships`;
     els.updatedText.textContent = 'print from ' + when(s.fetchedAt);
   } else { els.countText.textContent = ''; els.updatedText.textContent = ''; }
   populateTopoFilters();
@@ -229,18 +249,19 @@ function renderDiff(d) {
 
   const blocks = d.conferences.map((c) => {
     const lines = c.members.map((m) => {
-      if (m.status === 'added') return `<div class="dl add">+ ${esc(m.panel)} <span class="dim">[${dirText(m.to)}]</span></div>`;
-      if (m.status === 'removed') return `<div class="dl del">− ${esc(m.panel)} <span class="dim">[${dirText(m.from)}]</span></div>`;
-      return `<div class="dl chg">~ ${esc(m.panel)} <span class="dim">${dirText(m.from)} → ${dirText(m.to)}</span></div>`;
+      if (m.status === 'added') return `<div class="dl add">+ ${panelNameHtml(m.panel)} <span class="dim">[${dirText(m.to)}]</span></div>`;
+      if (m.status === 'removed') return `<div class="dl del">− ${panelNameHtml(m.panel)} <span class="dim">[${dirText(m.from)}]</span></div>`;
+      return `<div class="dl chg">~ ${panelNameHtml(m.panel)} <span class="dim">${dirText(m.from)} → ${dirText(m.to)}</span></div>`;
     }).join('');
     const tag = c.status === 'added' ? '<span class="dsum add">added</span>' : c.status === 'removed' ? '<span class="dsum del">removed</span>' : '<span class="dsum chg">changed</span>';
-    return `<div class="diff-conf ${c.status}"><div class="diff-conf-h">${esc(c.name)} ${tag}</div>${lines}</div>`;
+    return `<div class="diff-conf ${c.status}"><div class="diff-conf-h">${confNameHtml({ name: c.name, label: c.alias })} ${tag}</div>${lines}</div>`;
   }).join('');
   els.srcPrintDiff.innerHTML = head + blocks;
 }
 
 // Populate the node/card selects from the snapshot topology. Used by both views.
 function populateTopoFilters() {
+  populateSysFilters();
   const topo = state.data && state.data.topology;
   const have = topo && topo.loaded && topo.nodes && topo.nodes.length;
   for (const [nodeSel, cardSel] of [[els.mxNode, els.mxCard], [els.pnNode, els.pnCard]]) {
@@ -254,6 +275,18 @@ function populateTopoFilters() {
   }
 }
 function opt(v, label) { const o = document.createElement('option'); o.value = v; o.textContent = label; return o; }
+// All systems view: a System filter beside the node/card filters (public/all-systems.js).
+function populateSysFilters() {
+  const list = isAllView() ? state.data.systems || [] : [];
+  for (const sel of [els.mxSys, els.pnSys]) {
+    sel.hidden = list.length < 2;
+    const prev = sel.value;
+    sel.replaceChildren(opt('', 'All systems'));
+    for (const x of list) sel.appendChild(opt(x.id, x.name));
+    sel.value = list.some((x) => x.id === prev) ? prev : '';
+  }
+}
+const sysPass = (row, sel) => sel.hidden || !sel.value || row.system === sel.value;
 function fillCards(nodeSel, cardSel, keep) {
   const topo = state.data.topology;
   const node = topo.nodes.find((n) => n.id === nodeSel.value);
@@ -300,7 +333,7 @@ async function exportXlsx(btn) {
   const label = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   try {
-    const r = await fetch(sysUrl('/api/export.xlsx'));
+    const r = await fetch(btn && btn.dataset.sys ? rel('/api/export.xlsx?system=' + encodeURIComponent(btn.dataset.sys)) : sysUrl('/api/export.xlsx'));
     if (!r.ok) { let msg = 'HTTP ' + r.status; try { msg = (await r.json()).error || msg; } catch {} throw new Error(msg); }
     const blob = await r.blob();
     const cd = r.headers.get('Content-Disposition') || '';
@@ -351,14 +384,14 @@ function applyRoute() {
   const sec = settingsSectionFromHash();
   if (sec) {
     if (state.view !== 'settings') viewBeforeSettings = state.view;
-    else if (state.setSection !== sec) applySettings();   // switching section reverts an unsaved theme preview
+    else if (state.setSection !== sec) applySettings();   // switching section re-applies the stored settings
     state.setSection = sec;
     document.body.classList.add('is-settings');
     showView('settings');
     const scroller = document.getElementById('view-settings'); if (scroller) scroller.scrollTop = 0;
   } else if (state.view === 'settings') {
     document.body.classList.remove('is-settings');
-    applySettings();   // restores the document title + any previewed theme
+    applySettings();   // restores the document title
     showView(viewBeforeSettings && viewBeforeSettings !== 'settings' ? viewBeforeSettings : 'matrix');
   }
 }
@@ -388,6 +421,7 @@ function render() {
 // ---------- MATRIX ----------
 function renderMatrix() {
   const m = state.data.matrix;
+  const all = isAllView();
   const rq = els.mxRowSearch.value.trim().toLowerCase();
   const cq = els.mxColSearch.value.trim().toLowerCase();
   const panelsOnly = els.mxPanelsOnly.checked;
@@ -396,7 +430,7 @@ function renderMatrix() {
   m.rows.forEach((r, i) => {
     if (panelsOnly && !r.isPanel) return;
     if (rq && !r.name.toLowerCase().includes(rq)) return;
-    if (!topoPass(r, els.mxNode, els.mxCard)) return;
+    if (!topoPass(r, els.mxNode, els.mxCard) || !sysPass(r, els.mxSys)) return;
     rowPos.set(i, rowKeep.length); rowKeep.push({ i, r });
   });
   const colKeep = [], colPos = new Map();
@@ -422,16 +456,19 @@ function renderMatrix() {
 
   colKeep.forEach((ck, p) => {
     const h = document.createElement('div');
-    h.className = 'colhead' + (ck.c.kind === 'group' ? ' group' : '');
+    h.className = 'colhead' + (ck.c.kind === 'group' ? ' group' : '') + (ck.c.matched ? ' matched' : '');
     h.style.gridArea = `1 / ${p + 2}`;
-    h.title = `${ck.c.name}${ck.c.label ? ' (' + ck.c.label + ')' : ''} — ${ck.c.memberCount} members`;
-    h.textContent = ck.c.name;
+    h.dataset.tip = Names.tip(ck.c, `${ck.c.memberCount} members`,
+      ck.c.matched ? `Matched across ${ck.c.variants.length} systems:\n${variantsTitle(ck.c)}` : (all && ck.c.variants ? ck.c.variants[0].sysName : ''));
+    h.textContent = Names.short(ck.c);
     frag.appendChild(h);
   });
   rowKeep.forEach((rk, p) => {
     const h = document.createElement('div');
-    h.className = 'rowhead'; h.style.gridArea = `${p + 2} / 1`;
-    h.title = `${rk.r.name} — ${rk.r.addr}${rk.r.type ? ' · ' + rk.r.type : ''}`;
+    h.className = 'rowhead' + (all ? ` sys-row sys-${sysSlot(rk.r.system)}` : ''); h.style.gridArea = `${p + 2} / 1`;
+    // the port/addr only when it says something the name doesn't (print rows use the name as addr)
+    const where = all ? rk.r.sysName + (rk.r.port !== rk.r.name ? ' · ' + rk.r.port : '') : (rk.r.addr !== rk.r.name ? rk.r.addr : '');
+    h.dataset.tip = panelTip(rk.r.name, [where, rk.r.type].filter(Boolean).join(' · '));
     h.innerHTML = `<span class="nm">${esc(rk.r.name)}</span>${rk.r.isPanel ? '' : '<span class="pin">port</span>'}`;
     frag.appendChild(h);
   });
@@ -441,14 +478,17 @@ function renderMatrix() {
     const d = document.createElement('div');
     d.className = 'cell ' + cls(cell.t, cell.l); d.textContent = sym(cell.t, cell.l);
     d.style.gridArea = `${rp + 2} / ${cp + 2}`;
+    // panel × conference, both by full name (All systems: the conference's name on that row's system)
+    const r = m.rows[cell.r], c = m.cols[cell.c];
+    d.dataset.tip = (all ? `${r.name} · ${r.sysName}\n${variantNameOn(c, r.system)}` : `${r.name}\n${c.name}`) + `\n${dirText({ t: cell.t, l: cell.l })}`;
     frag.appendChild(d);
   }
   // pending-change overlay (toggle) — markers on top of the live cells
   if (state.showPending && state.pendingIdx) {
     const rowByName = new Map();
     rowKeep.forEach((rk, p) => { rowByName.set(rk.r.name, p); if (rk.r.addr) rowByName.set(rk.r.addr, p); });
-    const colByName = new Map();
-    colKeep.forEach((ck, p) => colByName.set(ck.c.name, p));
+    const colByName = new Map();   // all systems: keyed '#<col index>' (names can repeat across systems)
+    colKeep.forEach((ck, p) => colByName.set(all ? '#' + ck.i : ck.c.name, p));
     for (const [conf, panels] of state.pendingIdx.byConf) {
       const cp = colByName.get(conf); if (cp == null) continue;
       for (const [panel, rec] of panels) {
@@ -456,7 +496,7 @@ function renderMatrix() {
         const d = document.createElement('div');
         d.className = 'cell ' + (rec.op === 'add' ? 'pending-add' : 'pending-remove');
         d.textContent = rec.op === 'add' ? '＋' : '－';
-        d.title = `${rec.op === 'add' ? 'pending add' : 'pending remove'} · request #${rec.requestId}`;
+        d.dataset.tip = `${rowKeep[rp].r.name}\n${colKeep[cp].c.name}\n${rec.op === 'add' ? 'pending add' : 'pending remove'} · request #${rec.requestId}`;
         d.style.gridArea = `${rp + 2} / ${cp + 2}`;
         frag.appendChild(d);
       }
@@ -468,25 +508,30 @@ function renderMatrix() {
 // ---------- CONFERENCES ----------
 function allDests() { return [...(state.data.conferences || []), ...(state.data.groups || [])]; }
 function sortConfs(list) {
-  const byName = (a, b) => a.name.localeCompare(b.name);
+  // "name" is the name shown (the alias, else the long name); "long" sorts by long name
+  const byName = (a, b) => Names.short(a).localeCompare(Names.short(b)) || a.name.localeCompare(b.name);
   const arr = list.slice();
   switch (els.confSort.value) {
-    case 'name-desc': return arr.sort((a, b) => b.name.localeCompare(a.name));
-    case 'alias': return arr.sort((a, b) => (a.label || '').localeCompare(b.label || '') || byName(a, b));
+    case 'name-desc': return arr.sort((a, b) => byName(b, a));
+    case 'long': return arr.sort((a, b) => a.name.localeCompare(b.name));
     case 'members-desc': return arr.sort((a, b) => b.memberCount - a.memberCount || byName(a, b));
     case 'members-asc': return arr.sort((a, b) => a.memberCount - b.memberCount || byName(a, b));
+    case 'matched': return arr.sort((a, b) => (b.matched ? 1 : 0) - (a.matched ? 1 : 0) || byName(a, b));
     default: return arr.sort(byName);
   }
 }
 function renderConferences() {
   const q = els.confSearch.value.trim().toLowerCase();
-  const list = sortConfs(allDests().filter((d) => !q || d.name.toLowerCase().includes(q) || (d.label || '').toLowerCase().includes(q)));
+  const all = isAllView();
+  // All systems: also search each system's real name and the system names
+  const hay = (d) => [d.name, d.label, ...(all && d.variants ? d.variants.flatMap((v) => [v.name, v.sysName]) : [])].join(' ').toLowerCase();
+  const list = sortConfs(allDests().filter((d) => !q || hay(d).includes(q)));
   const ul = document.createDocumentFragment();
   list.forEach((d, i) => {
     const li = document.createElement('li');
     const realIdx = allDests().indexOf(d);
     li.className = state.selConf === realIdx ? 'active' : '';
-    li.innerHTML = `<span class="nm">${esc(d.name)}</span><span class="badge${d.kind === 'group' ? ' group' : ''}">${d.memberCount}</span>`;
+    li.innerHTML = `${confNameHtml(d, all && d.matched ? variantsTitle(d) : '')}${all ? `<span class="sys-chips">${sysChips(d.systems || [])}</span>` : ''}<span class="badge${d.kind === 'group' ? ' group' : ''}">${d.memberCount}</span>`;
     li.onclick = () => { state.selConf = realIdx; renderConferences(); renderConfDetail(d); };
     ul.appendChild(li);
   });
@@ -494,15 +539,21 @@ function renderConferences() {
   if (state.selConf != null && allDests()[state.selConf]) renderConfDetail(allDests()[state.selConf]);
 }
 function renderConfDetail(d) {
+  const all = isAllView();
   const rows = d.members.map((m) => `
-    <tr><td><a href="#" class="xlink" data-addr="${esc(m.addr)}" title="Open this panel">${esc(m.name)}</a></td><td class="type-chip">${esc(m.type)}</td>
-    <td>${dirPill(m.talk, m.listen)}</td><td class="type-chip">${esc(m.addr)}</td></tr>`).join('');
+    <tr><td><a href="#" class="xlink" data-addr="${esc(m.addr)}"${tipAttr(panelTip(m.name, 'Open this panel'))}>${esc(m.name)}</a></td>${all ? `<td>${sysChip(m.system, m.sysName)}</td>` : ''}<td class="type-chip">${esc(m.type)}</td>
+    <td>${dirPill(m.talk, m.listen)}</td><td class="type-chip">${esc(m.port || m.addr)}</td></tr>`).join('');
+  // All systems + matched: the conference's real name on each system
+  const names = all && d.matched ? `<table class="members sys-names"><thead><tr><th>System</th><th>Name on that system</th><th>Label</th></tr></thead><tbody>${
+    d.variants.map((v) => `<tr><td>${sysChip(v.system, v.sysName)}</td><td>${esc(v.name)}</td><td class="type-chip">${esc(v.label || '')}</td></tr>`).join('')}</tbody></table>` : '';
+  const idx = allDests().indexOf(d);
   els.confDetail.innerHTML = `
-    <div class="detail-head"><h2>${esc(d.name)}</h2><button class="btn small" data-reqconf="${esc(d.name)}">⇄ Request change</button></div>
-    <div class="meta"><span class="tag">${d.kind}</span>${d.label ? '<span class="tag">' + esc(d.label) + '</span>' : ''}${d.memberCount} members</div>
-    <table class="members"><thead><tr><th>Member</th><th>Type</th><th>Direction</th><th>Port</th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="4">No members.</td></tr>'}</tbody></table>
-    ${pendingPanelHtml('conf', d.name)}`;
+    <div class="detail-head"><h2>${confNameHtml(d)}</h2><button class="btn small" data-reqconf="${esc(d.name)}" data-confidx="${idx}">⇄ Request change</button></div>
+    <div class="meta"><span class="tag">${d.kind}</span>${d.label ? '<span class="tag">' + esc(d.name) + '</span>' : ''}${all && d.matched ? `<span class="tag matched-tag">⇄ matched across ${d.variants.length} systems</span>` : ''}${all && !d.matched && d.systems ? sysChips(d.systems) + ' ' : ''}${d.memberCount} members</div>
+    ${names}
+    <table class="members"><thead><tr><th>Member</th>${all ? '<th>System</th>' : ''}<th>Type</th><th>Direction</th><th>Port</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="${all ? 5 : 4}">No members.</td></tr>`}</tbody></table>
+    ${pendingPanelHtml('conf', all ? '#' + d.idx : d.name)}`;
 }
 function dirPill(t, l) {
   if (t && l) return '<span class="pill both">Talk + Listen</span>';
@@ -541,12 +592,14 @@ function gotoConference(idx) {
 // ---------- PANELS ----------
 function renderPanels() {
   const q = els.panelSearch.value.trim().toLowerCase();
-  const list = (state.data.panels || []).filter((p) => (!q || p.name.toLowerCase().includes(q) || p.addr.includes(q)) && topoPass(p, els.pnNode, els.pnCard));
+  const all = isAllView();
+  const list = (state.data.panels || []).filter((p) => (!q || p.name.toLowerCase().includes(q) || p.addr.toLowerCase().includes(q) || (all && (p.sysName || '').toLowerCase().includes(q)))
+    && topoPass(p, els.pnNode, els.pnCard) && sysPass(p, els.pnSys));
   const ul = document.createDocumentFragment();
   list.forEach((p) => {
     const li = document.createElement('li');
     li.className = state.selPanel === p.addr ? 'active' : '';
-    li.innerHTML = `<span class="nm">${esc(p.name)}</span><span class="badge">${p.memberships.length}</span>`;
+    li.innerHTML = `${panelNameHtml(p.name, p.type)}${all ? `<span class="sys-chips">${sysChip(p.system, p.sysName)}</span>` : ''}<span class="badge">${p.memberships.length}</span>`;
     li.onclick = () => { state.selPanel = p.addr; renderPanels(); renderPanelDetail(p); };
     ul.appendChild(li);
   });
@@ -557,18 +610,24 @@ function renderPanels() {
 function renderPanelDetail(p) {
   const members = p.memberships;
   const destIdx = destIndexByKindName();
+  const all = isAllView();
   const rows = p.memberships.map((m) => {
-    const di = destIdx.get(m.kind + '\u0000' + m.name);
-    const nameCell = di != null ? `<a href="#" class="xlink" data-conf="${di}" title="Open this ${m.kind}">${esc(m.name)}</a>` : esc(m.name);
+    // All systems: link by merged column index (names can repeat across systems)
+    const di = all && m.col != null ? allDests().findIndex((d) => d.idx === m.col) : destIdx.get(m.kind + '\u0000' + m.name);
+    // the alias (All systems: the merged column's), long name + this system's real name on hover
+    const d = di != null && di >= 0 ? allDests()[di] : null;
+    const shown = { name: m.name, label: d ? d.label : m.label };
+    const real = all && m.realName && m.realName !== m.name ? `Name on ${p.sysName}: ${m.realName}` : '';
+    const nameCell = d ? `<a href="#" class="xlink" data-conf="${di}"${tipAttr(Names.tip(shown, real, `Open this ${m.kind}`))}>${esc(Names.short(shown))}</a>` : confNameHtml(shown, real);
     return `
     <tr><td>${nameCell}</td><td class="type-chip">${m.kind}</td><td>${dirPill(m.talk, m.listen)}</td></tr>`;
   }).join('');
   els.panelDetail.innerHTML = `
-    <div class="detail-head"><h2>${esc(p.name)}</h2><button class="btn small" data-reqpanel="${esc(p.name)}">⇄ Request change</button></div>
-    <div class="meta"><span class="tag">${p.isPanel ? 'panel' : 'port'}</span>${p.type ? '<span class="tag">' + esc(p.type) + '</span>' : ''}${p.twoWire ? '<span class="tag">2-wire (in+out)</span>' : ''}<span class="tag">${esc(p.addr)}</span>${p.node ? '<span class="tag">' + esc(p.node) + ' · ' + esc(p.bay || '') + '</span>' : ''}${members.length} conference${members.length === 1 ? '' : 's'}</div>
+    <div class="detail-head"><h2>${panelNameHtml(p.name)}</h2><button class="btn small" data-reqpanel="${esc(p.name)}" data-paneladdr="${esc(p.addr)}">⇄ Request change</button></div>
+    <div class="meta">${all ? sysChip(p.system, p.sysName) + ' ' : ''}<span class="tag">${p.isPanel ? 'panel' : 'port'}</span>${p.type ? '<span class="tag">' + esc(p.type) + '</span>' : ''}${p.twoWire ? '<span class="tag">2-wire (in+out)</span>' : ''}<span class="tag">${esc(p.port || p.addr)}</span>${p.node ? '<span class="tag">' + esc(p.node) + ' · ' + esc(p.bay || '') + '</span>' : ''}${members.length} conference${members.length === 1 ? '' : 's'}</div>
     <table class="members"><thead><tr><th>Conference / Group</th><th>Kind</th><th>Direction</th></tr></thead>
     <tbody>${rows || '<tr><td colspan="3">Not on any conference.</td></tr>'}</tbody></table>
-    ${pendingPanelHtml('panel', p.name)}`;
+    ${pendingPanelHtml('panel', all ? p.addr : p.name)}`;
 }
 
 // ============================================================================
@@ -729,16 +788,25 @@ function buildPendingIndex() {
   const newConfs = new Set(state.pending.newConferences || []);
   const delConfs = new Set(state.pending.deletedConferences || []);
   const renameConfs = new Map();  // name -> { newName, requestId }
+  // All systems: a change names its system's REAL conference/panel; key it by the
+  // merged column ('#<col>') and 'system:panel' (the combined row addr) instead.
+  const all = isAllView();
+  const colOf = new Map();
+  if (all) state.data.matrix.cols.forEach((c, i) => (c.variants || []).forEach((v) => colOf.set(v.system + '\u0000' + v.name, i)));
+  const confKey = (c) => { if (!all) return c.conference; const i = colOf.get(c.system + '\u0000' + c.conference); return i == null ? null : '#' + i; };
   for (const c of state.pending.changes || []) {
-    if (c.type === 'rename_conference') { renameConfs.set(c.conference, { newName: c.newName, requestId: c.requestId }); continue; }
+    const ck = confKey(c);
+    if (c.type === 'rename_conference') { if (ck) renameConfs.set(ck, { newName: c.newName, requestId: c.requestId }); continue; }
     if (c.type === 'create_conference' || c.type === 'delete_conference') continue;
+    if (!ck) continue;
     // membership ops (add/remove/change_direction) overlay onto the matrix/detail
-    const panel = c.panelName || c.panel, op = c.type === 'add_member' ? 'add' : c.type === 'remove_member' ? 'remove' : 'dir';
-    const rec = { op, requestId: c.requestId, talk: c.talk, listen: c.listen, isNew: c.isNewConference };
-    if (!byConf.has(c.conference)) byConf.set(c.conference, new Map());
-    byConf.get(c.conference).set(panel, rec);
+    const name = c.panelName || c.panel, op = c.type === 'add_member' ? 'add' : c.type === 'remove_member' ? 'remove' : 'dir';
+    const panel = all ? c.system + ':' + (c.panel || name) : name;
+    const rec = { op, requestId: c.requestId, talk: c.talk, listen: c.listen, isNew: c.isNewConference, label: all ? `${name} (${c.sysName})` : name, conference: c.conference, system: c.system, sysName: all ? c.sysName : '' };
+    if (!byConf.has(ck)) byConf.set(ck, new Map());
+    byConf.get(ck).set(panel, rec);
     if (!byPanel.has(panel)) byPanel.set(panel, new Map());
-    byPanel.get(panel).set(c.conference, rec);
+    byPanel.get(panel).set(all ? c.conference + ` (${c.sysName})` : c.conference, rec);
   }
   state.pendingIdx = { byConf, byPanel, newConfs, delConfs, renameConfs };
 }
@@ -796,7 +864,7 @@ function renderReqTable() {
     return `
     <tr class="req-tr" data-req="${r.id}" data-status="${r.status}">
       <td class="rt-id"><span class="mono">#${r.id}</span></td>
-      <td class="rt-title">${esc(r.title)}${r.validation.hasBlockers ? ' <span class="v-bad" title="some changes need review">⚠</span>' : ''}</td>
+      <td class="rt-title">${isAllView() ? sysChip(r.system) + ' ' : ''}${esc(r.title)}${r.validation.hasBlockers ? ' <span class="v-bad" title="some changes need review">⚠</span>' : ''}</td>
       <td class="rt-who">${esc(r.requester.name || 'anon')}</td>
       <td class="rt-changes">${changes}</td>
       <td class="rt-status"><span class="st ${STATUS_CLASS[r.status]}">${SHORT_STATUS[r.status] || r.status}</span></td>
@@ -836,7 +904,7 @@ function memberLine(it) {
   const dir = it.talk && it.listen ? 'T+L' : it.talk ? 'T' : it.listen ? 'L' : '';
   const op = it.type === 'add_member' ? ['add', '＋ add'] : it.type === 'remove_member' ? ['remove', '－ remove'] : ['dir', '⇄ set'];
   const showDir = (it.type === 'add_member' || it.type === 'change_direction') && dir;
-  return `<li class="grp-item ${op[0]}"><span class="gi-op">${op[1]}</span><span class="gi-panel">${esc(it.panel.name)}</span>${showDir ? `<span class="gi-dir">${dir}</span>` : ''}<span class="gi-st-wrap">${itemStatus(it)}</span></li>`;
+  return `<li class="grp-item ${op[0]}"><span class="gi-op">${op[1]}</span><span class="gi-panel">${panelNameHtml(it.panel.name)}</span>${showDir ? `<span class="gi-dir">${dir}</span>` : ''}<span class="gi-st-wrap">${itemStatus(it)}</span></li>`;
 }
 // Group a request's changes by conference — the way the work is done in the config tool.
 function groupChanges(items) {
@@ -852,15 +920,15 @@ function groupChanges(items) {
   }
   return [...m.values()];
 }
-function renderChangeGroups(items) {
+function renderChangeGroups(items, system) {
   return groupChanges(items).map((g) => {
     const tags = [];
     if (g.create) tags.push(`<span class="grp-tag new">＋ create new</span>${itemStatus(g.create)}`);
     if (g.del) tags.push(`<span class="grp-tag del">✕ delete conference</span>${itemStatus(g.del)}`);
-    if (g.rename) tags.push(`<span class="grp-tag ren">✎ rename → “${esc(g.rename.newName)}”</span>${itemStatus(g.rename)}`);
+    if (g.rename) tags.push(`<span class="grp-tag ren">✎ rename → “${esc(g.rename.newName)}”${g.rename.newLabel ? ` (${esc(g.rename.newLabel)})` : ''}</span>${itemStatus(g.rename)}`);
     const gcls = g.create ? 'grp-new' : g.del ? 'grp-del' : g.rename ? 'grp-ren' : '';
     return `<div class="grp ${gcls}">
-      <div class="grp-head"><span class="grp-name">${esc(g.name)}</span>${g.label ? ` <span class="muted">(${esc(g.label)})</span>` : ''}<span class="grp-tags">${tags.join('')}</span></div>
+      <div class="grp-head"><span class="grp-name">${confNameByName(g.name, system, g.label)}</span><span class="grp-tags">${tags.join('')}</span></div>
       ${g.members.length ? `<ul class="grp-items">${g.members.map(memberLine).join('')}</ul>` : ''}
     </div>`;
   }).join('');
@@ -880,7 +948,7 @@ function renderReqDetail() {
     ${r.justification ? `<p class="rd-justify">${esc(r.justification)}</p>` : ''}
     ${r.validation.hasBlockers ? '<div class="rd-warn">⚠ Some changes don’t match the current system — review before implementing.</div>' : ''}
     <div class="rd-section-h">What to change in the config tool <span class="muted">(${r.items.length})</span></div>
-    <div class="grp-list">${renderChangeGroups(r.items)}</div>
+    <div class="grp-list">${renderChangeGroups(r.items, r.system)}</div>
     <div class="rd-actions">${transitionButtons(r.status)}</div>
     <div class="rd-cols">
       <div>
@@ -930,13 +998,13 @@ async function renderWorkOrder() {
     if (g.del) tags.push('<span class="grp-tag del">✕ delete conference</span>');
     if (g.rename) tags.push(`<span class="grp-tag ren">✎ rename → “${esc(g.rename)}”</span>`);
     const items = [
-      ...g.adds.map((a) => `<li class="grp-item add"><span class="gi-op">＋ add</span><span class="gi-panel">${esc(a.panel)}</span>${dTag(a)}${req(a.requestId)}</li>`),
-      ...g.removes.map((rm) => `<li class="grp-item remove"><span class="gi-op">－ remove</span><span class="gi-panel">${esc(rm.panel)}</span>${req(rm.requestId)}</li>`),
-      ...(g.dirs || []).map((d) => `<li class="grp-item dir"><span class="gi-op">⇄ set</span><span class="gi-panel">${esc(d.panel)}</span>${dTag(d)}${req(d.requestId)}</li>`),
+      ...g.adds.map((a) => `<li class="grp-item add"><span class="gi-op">＋ add</span><span class="gi-panel">${panelNameHtml(a.panel)}</span>${dTag(a)}${req(a.requestId)}</li>`),
+      ...g.removes.map((rm) => `<li class="grp-item remove"><span class="gi-op">－ remove</span><span class="gi-panel">${panelNameHtml(rm.panel)}</span>${req(rm.requestId)}</li>`),
+      ...(g.dirs || []).map((d) => `<li class="grp-item dir"><span class="gi-op">⇄ set</span><span class="gi-panel">${panelNameHtml(d.panel)}</span>${dTag(d)}${req(d.requestId)}</li>`),
     ].join('');
     const gcls = g.isNew ? 'grp-new' : g.del ? 'grp-del' : g.rename ? 'grp-ren' : '';
     return `<div class="grp ${gcls}">
-      <div class="grp-head"><span class="grp-name">${esc(g.conference)}</span>${g.conferenceLabel ? ` <span class="muted">(${esc(g.conferenceLabel)})</span>` : ''}<span class="grp-tags">${tags.join('')}</span></div>
+      <div class="grp-head">${g.sysName ? sysChip(g.system, g.sysName) + ' ' : ''}<span class="grp-name">${confNameByName(g.conference, g.system, g.conferenceLabel)}</span><span class="grp-tags">${tags.join('')}</span></div>
       ${items ? `<ul class="grp-items">${items}</ul>` : ''}
     </div>`;
   };
@@ -978,7 +1046,8 @@ function renderChips(field) {
   const sel = state.composer ? state.composer.sel[field] : [];
   if (!multi || !sel.length) { cont.innerHTML = ''; cont.classList.add('hidden'); return; }
   cont.classList.remove('hidden');
-  cont.innerHTML = sel.map((v, i) => `<span class="tok">${esc(v)}<button class="tok-x" data-field="${field}" data-i="${i}" title="Remove">×</button></span>`).join('');
+  const show = field === 'conf' ? (v) => confNameByName(v) : (v) => panelNameHtml(v);
+  cont.innerHTML = sel.map((v, i) => `<span class="tok">${show(v)}<button class="tok-x" data-field="${field}" data-i="${i}" title="Remove">×</button></span>`).join('');
 }
 // how many change items the current selection will produce → live button label
 function updateAddCount() {
@@ -1051,12 +1120,12 @@ function composerAddChange() {
 function describeStaged(ch) {
   const d = ch.talk && ch.listen ? 'T+L' : ch.talk ? 'T' : ch.listen ? 'L' : '—';
   switch (ch.type) {
-    case 'create_conference': return { verb: 'create', cls: 'add', label: `“${esc(ch.conference)}”${ch.label ? ` <span class="muted">(${esc(ch.label)})</span>` : ''}` };
-    case 'rename_conference': return { verb: 'rename', cls: 'dir', label: `“${esc(ch.conference)}” <span class="muted">→</span> “${esc(ch.newName)}”` };
-    case 'delete_conference': return { verb: 'delete', cls: 'rem', label: `“${esc(ch.conference)}”` };
-    case 'add_member': return { verb: 'add', cls: 'add', label: `${esc(ch.conference)} <span class="muted">to</span> ${esc(ch.panel)} <span class="muted">· ${d}</span>` };
-    case 'remove_member': return { verb: 'remove', cls: 'rem', label: `${esc(ch.conference)} <span class="muted">from</span> ${esc(ch.panel)}` };
-    case 'change_direction': return { verb: 'edit', cls: 'dir', label: `${esc(ch.conference)} <span class="muted">on</span> ${esc(ch.panel)} <span class="muted">→ ${d}</span>` };
+    case 'create_conference': return { verb: 'create', cls: 'add', label: `“${confNameHtml({ name: ch.conference, label: ch.label })}”` };
+    case 'rename_conference': return { verb: 'rename', cls: 'dir', label: `“${confNameByName(ch.conference)}” <span class="muted">→</span> “${confNameHtml({ name: ch.newName, label: ch.newLabel })}”` };
+    case 'delete_conference': return { verb: 'delete', cls: 'rem', label: `“${confNameByName(ch.conference)}”` };
+    case 'add_member': return { verb: 'add', cls: 'add', label: `${confNameByName(ch.conference)} <span class="muted">to</span> ${panelNameHtml(ch.panel)} <span class="muted">· ${d}</span>` };
+    case 'remove_member': return { verb: 'remove', cls: 'rem', label: `${confNameByName(ch.conference)} <span class="muted">from</span> ${panelNameHtml(ch.panel)}` };
+    case 'change_direction': return { verb: 'edit', cls: 'dir', label: `${confNameByName(ch.conference)} <span class="muted">on</span> ${panelNameHtml(ch.panel)} <span class="muted">→ ${d}</span>` };
     default: return { verb: ch.type, cls: '', label: '' };
   }
 }
@@ -1073,8 +1142,8 @@ function describeBatch(batch) {
   const dirTag = op === 'remove_member' ? '' : ` <span class="muted">· ${d}</span>`;
   const cN = (n) => `${n} conference${n === 1 ? '' : 's'}`, pN = (n) => `${n} panel${n === 1 ? '' : 's'}`;
   let label;
-  if (confs.length === 1) label = `${esc(confs[0])} <span class="muted">${prep}</span> ${pN(panels.length)}${dirTag}`;
-  else if (panels.length === 1) label = `${cN(confs.length)} <span class="muted">${prep}</span> ${esc(panels[0])}${dirTag}`;
+  if (confs.length === 1) label = `${confNameByName(confs[0])} <span class="muted">${prep}</span> ${pN(panels.length)}${dirTag}`;
+  else if (panels.length === 1) label = `${cN(confs.length)} <span class="muted">${prep}</span> ${panelNameHtml(panels[0])}${dirTag}`;
   else label = `${cN(confs.length)} <span class="muted">×</span> ${pN(panels.length)} <span class="muted">(${items.length})</span>${dirTag}`;
   return { verb, cls, label };
 }
@@ -1089,7 +1158,7 @@ function renderComposerChanges() {
   }).join('');
 }
 // Custom searchable dropdown (keeps type-to-filter; replaces the native datalist).
-// opts: { onPick(value), emptyHint() }
+// opts: { onPick(value), emptyHint(), render(value) → option html, hay(value) → text to search }
 function attachCombo(inputId, listId, getItems, opts = {}) {
   const input = document.getElementById(inputId), list = document.getElementById(listId);
   let filtered = [], active = -1;
@@ -1109,7 +1178,8 @@ function attachCombo(inputId, listId, getItems, opts = {}) {
     const q = input.value.trim().toLowerCase();
     const all = getItems();
     const sel = selected();
-    filtered = all.filter((n) => (!q || n.toLowerCase().includes(q)) && !sel.includes(n)).slice(0, 60);
+    const hay = opts.hay || ((n) => n);
+    filtered = all.filter((n) => (!q || hay(n).toLowerCase().includes(q)) && !sel.includes(n)).slice(0, 60);
     active = -1;
     if (!filtered.length) {
       const hint = !all.length && opts.emptyHint ? opts.emptyHint() : null;
@@ -1117,7 +1187,8 @@ function attachCombo(inputId, listId, getItems, opts = {}) {
       else list.classList.add('hidden');
       return;
     }
-    list.innerHTML = filtered.map((n, i) => `<div class="combo-opt" data-i="${i}">${esc(n)}</div>`).join('');
+    const render = opts.render || esc;
+    list.innerHTML = filtered.map((n, i) => `<div class="combo-opt" data-i="${i}">${render(n)}</div>`).join('');
     list.classList.remove('hidden');
     place();
   };
@@ -1175,7 +1246,10 @@ function pendingPanelHtml(kind, name) {
   const ren = kind === 'conf' ? pi.renameConfs.get(name) : null;
   if (!m && !isNewConf && !isDelConf && !ren) return '';
   const opTag = (rec) => rec.op === 'add' ? '<span class="padd">＋ pending add</span>' : rec.op === 'remove' ? '<span class="prem">－ pending remove</span>' : '<span class="pdir">⇄ pending direction</span>';
-  const rows = m ? [...m.entries()].map(([k, rec]) => `<li>${opTag(rec)} ${esc(k)} <a href="#" class="reqlink" data-goreq="${rec.requestId}">#${rec.requestId}</a></li>`).join('') : '';
+  // conference detail lists panels; panel detail lists conferences (by alias, long name on hover)
+  const who = (k, rec) => (kind === 'conf' ? panelNameHtml(rec.label || k)
+    : confNameByName(rec.conference, rec.system) + (rec.sysName ? ` <span class="muted">(${esc(rec.sysName)})</span>` : ''));
+  const rows = m ? [...m.entries()].map(([k, rec]) => `<li>${opTag(rec)} ${who(k, rec)} <a href="#" class="reqlink" data-goreq="${rec.requestId}">#${rec.requestId}</a></li>`).join('') : '';
   const banners = [
     isNewConf ? '<div class="pending-new">＋ pending creation</div>' : '',
     isDelConf ? '<div class="pending-del">✕ pending deletion</div>' : '',
@@ -1219,6 +1293,8 @@ els.panelDetail.addEventListener('click', (e) => { const a = e.target.closest('a
 els.topoFile.addEventListener('change', () => { const f = els.topoFile.files[0]; if (f) uploadTopology(f); els.topoFile.value = ''; });
 els.printFile.addEventListener('change', () => { const f = els.printFile.files[0]; if (f) uploadPrint(f); els.printFile.value = ''; });
 els.mxNode.addEventListener('change', () => { fillCards(els.mxNode, els.mxCard, ''); renderMatrix(); });
+els.mxSys.addEventListener('change', () => renderMatrix());
+els.pnSys.addEventListener('change', () => renderPanels());
 els.mxCard.addEventListener('change', renderMatrix);
 els.pnNode.addEventListener('change', () => { fillCards(els.pnNode, els.pnCard, ''); renderPanels(); });
 els.pnCard.addEventListener('change', renderPanels);
@@ -1226,7 +1302,7 @@ els.pnCard.addEventListener('change', renderPanels);
 // --- change-request platform wiring ---
 const $ = (id) => document.getElementById(id);
 $('mxPending').addEventListener('change', () => { state.showPending = $('mxPending').checked; renderMatrix(); });
-$('reqNew').addEventListener('click', () => openComposer());
+$('reqNew').addEventListener('click', (e) => requestChange({}, e.currentTarget));   // public/all-systems.js picks a system in All systems
 $('reqFilters').addEventListener('click', (e) => { const c = e.target.closest('.req-chip'); if (!c) return; state.reqStatusFilter = c.dataset.filter; renderRequests(); });
 $('reqRows').addEventListener('click', (e) => { const tr = e.target.closest('.req-tr'); if (tr) selectRequest(Number(tr.dataset.req)); });
 $('reqDetail').addEventListener('click', (e) => {
@@ -1249,6 +1325,13 @@ $('cChanges').addEventListener('click', (e) => { const x = e.target.closest('.cc
   state.composer.sel[x.dataset.field].splice(Number(x.dataset.i), 1);
   renderChips(x.dataset.field); updateAddCount();
 }));
+// A conference option in the picker: the alias, with the long name beside it to
+// search by eye (and on hover, for names too long for the list).
+function confOptionHtml(name) {
+  const alias = confAlias(name);
+  if (!alias || alias === name) return confNameByName(name);
+  return `<span${tipAttr(name)}><span class="combo-alias">${esc(alias)}</span> <span class="combo-long">${esc(name)}</span></span>`;
+}
 // conference combo (multi-select): scoped to the selected panels' memberships for
 // remove / change-direction; otherwise all conferences (plus any created here).
 attachCombo('cConfInput', 'cConfList', () => {
@@ -1259,8 +1342,8 @@ attachCombo('cConfInput', 'cConfList', () => {
     return [...set];
   }
   return [...new Set([...stagedNewConfs(), ...((state.data && state.data.conferences || []).map((c) => c.name))])];
-}, { field: 'conf', multi: confMulti, emptyHint: () => (state.composer && PANEL_SCOPED.has(state.composer.op) && !state.composer.sel.panel.length) ? 'Pick a panel first' : null });
-attachCombo('cPanelInput', 'cPanelList', () => (state.data && state.data.panels || []).map((p) => p.name), { field: 'panel', multi: () => true });
+}, { field: 'conf', multi: confMulti, render: confOptionHtml, hay: (n) => n + ' ' + confAlias(n), emptyHint: () => (state.composer && PANEL_SCOPED.has(state.composer.op) && !state.composer.sel.panel.length) ? 'Pick a panel first' : null });
+attachCombo('cPanelInput', 'cPanelList', () => (state.data && state.data.panels || []).map((p) => p.name), { field: 'panel', multi: () => true, render: (n) => panelNameHtml(n) });
 // Close the (fixed) dropdowns when the MODAL scrolls — but not when the list
 // itself is being scrolled (that would make it vanish as you scroll the options).
 $('composer').addEventListener('scroll', (e) => {
@@ -1270,8 +1353,8 @@ $('composer').addEventListener('scroll', (e) => {
 $('composer').addEventListener('click', (e) => { if (e.target.id === 'composer') closeComposer(); });
 // contextual request buttons + pending-box request links in the detail views
 function detailRequestClick(e) {
-  const rc = e.target.closest('[data-reqconf]'); if (rc) { openComposer({ conference: rc.dataset.reqconf, op: 'add_member' }); return; }
-  const rp = e.target.closest('[data-reqpanel]'); if (rp) { openComposer({ panel: rp.dataset.reqpanel, op: 'add_member' }); return; }
+  const rc = e.target.closest('[data-reqconf]'); if (rc) { requestChange({ conference: rc.dataset.reqconf, confIdx: Number(rc.dataset.confidx), op: 'add_member' }, rc); return; }
+  const rp = e.target.closest('[data-reqpanel]'); if (rp) { requestChange({ panel: rp.dataset.reqpanel, panelAddr: rp.dataset.paneladdr, op: 'add_member' }, rp); return; }
   const gr = e.target.closest('[data-goreq]'); if (gr) { e.preventDefault(); showView('requests'); selectRequest(Number(gr.dataset.goreq)); }
 }
 els.confDetail.addEventListener('click', detailRequestClick);
@@ -1280,9 +1363,7 @@ els.panelDetail.addEventListener('click', detailRequestClick);
 // --- settings wiring ---
 els.settingsWrap.addEventListener('click', (e) => {
   const nav = e.target.closest('[data-section]');
-  if (nav) return;   // section links are plain #settings/<key> anchors → applyRoute()  // applySettings reverts any unsaved theme preview
-  const seg = e.target.closest('[data-theme-pick]');
-  if (seg) { onThemePick(seg); return; }
+  if (nav) return;   // section links are plain #settings/<key> anchors → applyRoute()
   const b = e.target.closest('[data-act]'); if (!b) return;
   if (b.tagName === 'A') e.preventDefault();
   settingsAction(b.dataset.act, b);
@@ -1312,7 +1393,6 @@ renderWho();
 // ============================================================================
 // SETTINGS — shared deployment configuration (engineer-gated writes)
 // ============================================================================
-const SET_THEMES = [['dark', 'Dark'], ['light', 'Light']];
 const SET_VIEWS = [['matrix', 'Matrix'], ['conferences', 'Conferences'], ['panels', 'Panels'], ['requests', 'Requests'], ['workorder', 'Work order']];
 const SET_DATEFMT = [['short', 'Short (6/12/26)'], ['medium', 'Medium (12 Jun 2026)'], ['long', 'Long (June 12, 2026)']];
 const SET_ROLES = [['viewer', 'Viewer'], ['editor', 'Editor'], ['admin', 'Admin']];
@@ -1343,7 +1423,7 @@ function setMsg(text, ok) {
   if (text && ok) setTimeout(() => { if (el.textContent === text) { el.textContent = ''; el.className = 'set-msg'; } }, 2500);
 }
 
-// Persist a partial patch, refresh local copy, re-apply branding/theme, re-render.
+// Persist a partial patch, refresh local copy, re-apply branding, re-render.
 async function saveSettingsPatch(patch, okMsg) {
   try {
     state.settings = await apiWrite('/api/settings', 'PATCH', patch);
@@ -1359,7 +1439,7 @@ const setOpt = (pairs, cur) => pairs.map(([v, l]) => `<option value="${esc(v)}"$
 const SET_SECTIONS = [
   { key: 'systems', icon: '⛓', label: 'Systems', sub: 'Prints & topology' },
   { key: 'branding', icon: '✦', label: 'Branding', sub: 'Identity & logo' },
-  { key: 'display', icon: '◐', label: 'Display', sub: 'Defaults & theme' },
+  { key: 'display', icon: '◐', label: 'Display', sub: 'Defaults' },
   { key: 'safety', icon: '⌁', label: 'Access', sub: 'Login wall · setup' },
   { key: 'users', icon: '⚇', label: 'Users', sub: 'Accounts & SSO' },
   { key: 'customers', icon: '◎', label: 'Customers', sub: 'Scoped channel views' },
@@ -1491,6 +1571,7 @@ function secSystems(s, eng, dis, sysList) {
       <aside class="sysmd-list">
         <div class="sysmd-rows">${rows}</div>
         ${eng ? `<button class="btn small sysmd-add${state.sysSel === '__new__' ? ' active' : ''}" data-act="sys-add-open">+ Add system</button>` : ''}
+        ${sysList.length > 1 ? `<button class="btn small sysmd-add" data-act="export-xlsx" data-sys="${ALL_SYSTEMS}" title="One workbook: every system, matched conferences merged, with a System column">⬇ Export all systems</button>` : ''}
       </aside>
       <div class="sysmd-detail">${detail}</div>
     </div>`;
@@ -1576,7 +1657,7 @@ function secBranding(s, eng, dis, sysList) {
       <label class="fl"><span>Site name</span><input id="stSiteName" value="${esc(s.branding.siteName)}"${dis} /></label>
       <label class="fl"><span>Subtitle</span><input id="stSubtitle" value="${esc(s.branding.subtitle)}"${dis} /></label>
       <div class="fl2">
-        <label class="fl"><span>Default system</span><select id="stDefaultSystem"${dis}><option value="">— first available —</option>${setOpt(sysList.map((x) => [x.id, x.name]), s.branding.defaultSystem)}</select></label>
+        <label class="fl"><span>Default system</span><select id="stDefaultSystem"${dis}><option value="">— first available —</option>${setOpt([...(sysList.length > 1 ? [[ALL_SYSTEMS, ALL_SYSTEMS_NAME]] : []), ...sysList.map((x) => [x.id, x.name])], s.branding.defaultSystem)}</select></label>
         <label class="fl"><span>Default landing view</span><select id="stDefaultView"${dis}>${setOpt(SET_VIEWS, s.branding.defaultView)}</select></label>
       </div>
       <div class="fl"><span>Logo</span>
@@ -1594,12 +1675,9 @@ function secBranding(s, eng, dis, sysList) {
 }
 
 function secDisplay(s, eng, dis) {
-  const seg = (cur) => SET_THEMES.map(([v, l]) =>
-    `<button class="seg-btn${v === cur ? ' active' : ''}" data-theme-pick="${v}"${dis}>${l}</button>`).join('');
   return `${secHead('Display defaults', 'Applied to every client on first load. Each viewer can still override in-session from the header.')}
     <div class="sec-body">
       <label class="fl fl-narrow"><span>Date format</span><select id="stDateFmt"${dis}>${setOpt(SET_DATEFMT, s.display.dateFormat)}</select></label>
-      <div class="fl"><span>Theme</span><div class="seg" id="stThemeSeg" data-theme="${esc(s.display.theme)}">${seg(s.display.theme)}</div></div>
       <div class="tgl-group">
         ${tgl('stPanelsOnly', s.display.matrixPanelsOnly, 'Matrix opens to panels only', 'Hide non-panel ports by default', dis)}
       </div>
@@ -1812,7 +1890,6 @@ async function settingsAction(act, ctx) {
     }
     if (act === 'save-display') {
       const d = {
-        theme: (W.querySelector('#stThemeSeg') || {}).dataset?.theme || 'dark',
         dateFormat: W.querySelector('#stDateFmt').value,
         matrixPanelsOnly: W.querySelector('#stPanelsOnly').checked,
       };
@@ -1968,17 +2045,6 @@ function onLogoFile(file) {
   reader.readAsDataURL(file);
 }
 
-// Theme segmented control: highlight the pick, live-preview the page, mark dirty.
-// (Switching sections or reloading without saving reverts to the stored theme.)
-function onThemePick(btn) {
-  if (btn.disabled) return;
-  const seg = btn.closest('.seg');
-  seg.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b === btn));
-  seg.dataset.theme = btn.dataset.themePick;
-  document.documentElement.setAttribute('data-theme', btn.dataset.themePick);
-  markSettingsDirty();
-}
-
 // Enable the active section's Save button + flag unsaved state.
 function markSettingsDirty() {
   const panel = document.getElementById('setPanel'); if (!panel) return;
@@ -1991,13 +2057,15 @@ function markSettingsDirty() {
 function populateSystems(list, def) {
   state.systems = list;
   els.system.replaceChildren();
+  const canAll = list.length > 1;   // All systems: one combined matrix (public/all-systems.js)
+  if (canAll) els.system.appendChild(opt(ALL_SYSTEMS, ALL_SYSTEMS_NAME));
   for (const s of list) {
     const o = document.createElement('option');
     o.value = s.id;
     o.textContent = s.name + (s.configured ? '' : ' ·');
     els.system.appendChild(o);
   }
-  state.system = (list.find((s) => s.id === def) || list.find((s) => s.configured) || list[0] || {}).id || def;
+  state.system = canAll && def === ALL_SYSTEMS ? ALL_SYSTEMS : ((list.find((s) => s.id === def) || list.find((s) => s.configured) || list[0] || {}).id || def);
   els.system.value = state.system;
 }
 
@@ -2023,12 +2091,11 @@ function applyLogo(uri) {
   }
 }
 
-// Apply shared settings to the UI. Theme + branding are safe to re-apply
+// Apply shared settings to the UI. Branding is safe to re-apply
 // any time; `boot` also seeds the per-session matrix controls and the
 // landing view/system (so a later save doesn't yank the user's current view).
 function applySettings(boot) {
   const s = state.settings; if (!s) return;
-  document.documentElement.setAttribute('data-theme', s.display.theme || 'dark');
   document.title = s.branding.siteName || 'Intercom Matrix';
   const h1 = document.querySelector('.brand h1'); if (h1) h1.textContent = s.branding.siteName || 'Intercom Matrix';
   applyLogo(s.branding.logoDataUri);

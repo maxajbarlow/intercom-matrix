@@ -11,7 +11,7 @@
 //
 // Loaded BEFORE app.js; everything here is called lazily from app.js.
 
-/* global state, esc, api, apiWrite, secHead, setMsg, renderSettings, loadUsers, CustModel */
+/* global state, esc, api, apiWrite, secHead, setMsg, renderSettings, loadUsers, CustModel, tipAttr, panelTip, confNameHtml */
 
 const SEARCH_LIMIT = 150;          // result rows rendered (Add all still acts on every match)
 const PREVIEW_DEBOUNCE_MS = 250;
@@ -139,7 +139,7 @@ function panelRow(p) {
   const n = (p.memberships || []).length;
   const meta = p.missing ? '<span class="cu-warn">not in current print</span>' : (p.type ? `<span>${esc(p.type)}</span>` : '');
   return `<li class="cu-p${p.missing ? ' missing' : ''}">
-    <span class="cu-p-tx"><b title="${esc(p.name)}">${esc(p.name)}</b>${meta}</span>
+    <span class="cu-p-tx"><b${tipAttr(panelTip(p.name, p.type))}>${esc(p.name)}</b>${meta}</span>
     ${p.missing ? '' : `<span class="cu-ch" title="${plural(n, 'channel')}">${n}</span>`}
     <button class="cu-x" data-act="cust-rm" data-sys="${esc(p.system)}" data-addr="${esc(p.source.addr)}" aria-label="Remove ${esc(p.name)}" title="Remove">×</button>
   </li>`;
@@ -171,7 +171,7 @@ function paintResults() {
       ${g.items.map((p) => { const idx = i++; return `
         <div class="cu-opt${p.added ? ' on' : ''}${idx === c.qi ? ' active' : ''}" id="cuOpt${idx}" role="option" aria-selected="${p.added}" data-act="cust-toggle" data-idx="${idx}">
           <span class="cu-tick" aria-hidden="true"></span>
-          <span class="cu-p-tx"><b>${esc(p.name)}</b>${p.type ? `<span>${esc(p.type)}</span>` : ''}</span>
+          <span class="cu-p-tx"><b${tipAttr(panelTip(p.name, p.type))}>${esc(p.name)}</b>${p.type ? `<span>${esc(p.type)}</span>` : ''}</span>
           <span class="cu-ch" title="${plural((p.memberships || []).length, 'channel')}">${(p.memberships || []).length}</span>
         </div>`; }).join('')}`).join('')}
     </div>
@@ -225,7 +225,7 @@ function paintChannels() {
   if (!cust.sources.length) { host.innerHTML = ''; return; }
   if (!ch) { host.innerHTML = '<h4>Channels <span class="cu-n">…</span></h4>'; return; }
   const body = ch.groups.map((g) => `${ch.groups.length > 1 ? `<div class="cu-sys-h"><b>${esc(g.sysName)}</b><span>${g.confs.length}</span></div>` : ''}
-    <ul class="cu-chlist">${g.confs.map((x) => `<li title="${esc(x.label || '')}">${esc(x.name)}</li>`).join('')}</ul>`).join('');
+    <ul class="cu-chlist">${g.confs.map((x) => `<li>${confNameHtml(x)}</li>`).join('')}</ul>`).join('');
   host.innerHTML = `<details class="cu-chan"${c.chanOpen ? ' open' : ''}><summary><h4>Channels <span class="cu-n">${ch.total}</span></h4><span class="cu-chev" aria-hidden="true"></span></summary>${ch.total ? body : '<p class="cu-empty">These panels host no channels.</p>'}</details>`;
 }
 

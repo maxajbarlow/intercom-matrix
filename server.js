@@ -26,6 +26,8 @@ const { currentUser, can, loginRequired } = require('./lib/identity');
 const customerDb = require('./lib/customer-db');
 const access = require('./lib/customer-access');
 const viewAs = require('./lib/view-as');
+const allSystems = require('./lib/all-systems');
+const { ALL_ID } = require('./lib/combined-model');
 const { resolveScope, filterPrintDiff } = require('./lib/customer-scope');
 
 const PORT = Number(process.env.PORT) || 8080;
@@ -96,11 +98,24 @@ app.use('/api', (req, res, next) => {
 });
 
 const sysId = (req) => (req.query.system || req.body?.system || svc.defaultSystem());
+const isAll = (req) => sysId(req) === ALL_ID;
+
+// "All systems" (system=all) is a combined READ view (lib/combined-model). Anything
+// that belongs to exactly one system — uploads, print versions/diffs, raising a
+// request, reconciling — must name that system.
+const PER_SYSTEM_PATHS = new Set(['/print-file', '/print-versions', '/print-diff', '/topology-file', '/requests-reconcile']);
+app.use('/api', (req, res, next) => {
+  if (!isAll(req)) return next();
+  if (PER_SYSTEM_PATHS.has(req.path) || (req.method === 'POST' && req.path === '/requests')) {
+    return res.status(400).json({ error: 'This belongs to one system — pick a system first (not "All systems")' });
+  }
+  next();
+});
 
 // Customer scoping (lib/customer-access). EVERY route that returns system data
 // goes through scoped(): admins/editors and customer-less deployments get the
 // full snapshot; a customer viewer gets only their channels.
-const scoped = (req) => access.scopedSnapshot(currentUser(req), sysId(req));
+const scoped = (req) => (isAll(req) ? access.combinedSnapshot(currentUser(req)) : access.scopedSnapshot(currentUser(req), sysId(req)));
 // { scope, userId } for request-service, or null when unscoped.
 function visibleTo(req) {
   const user = currentUser(req);
@@ -373,7 +388,10 @@ app.get('/api/print-diff', (req, res) => {
 // Requests capture change INTENT (no live writes); an engineer applies them in
 // the config tool and the next print reconciles them. Identity is claimed (no auth yet).
 app.get('/api/requests', (req, res) => {
-  try { const v = visibleTo(req); res.json({ requests: requests.listRequests({ system: sysId(req), status: req.query.status }, v), stats: requests.stats(sysId(req), v) }); }
+  try {
+    if (isAll(req)) return res.json(allSystems.listAll(currentUser(req), req.query.status));
+    const v = visibleTo(req); res.json({ requests: requests.listRequests({ system: sysId(req), status: req.query.status }, v), stats: requests.stats(sysId(req), v) });
+  }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/requests', (req, res) => {
@@ -410,8 +428,8 @@ app.post('/api/requests/:id/comments', (req, res) => {
   try { requests.addComment(id, currentUser(req), req.body?.body); res.json(requests.getRequest(id, vis.v)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.get('/api/pending', (req, res) => { try { res.json(requests.pendingChanges(sysId(req), visibleTo(req))); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.get('/api/work-order', gate('workorder:read'), (req, res) => { try { res.json(requests.workOrder(sysId(req))); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.get('/api/pending', (req, res) => { try { res.json(isAll(req) ? allSystems.pendingAll(currentUser(req)) : requests.pendingChanges(sysId(req), visibleTo(req))); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.get('/api/work-order', gate('workorder:read'), (req, res) => { try { res.json(isAll(req) ? allSystems.workOrderAll(currentUser(req)) : requests.workOrder(sysId(req))); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.post('/api/requests-reconcile', (req, res) => { try { res.json(requests.reconcile(sysId(req))); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.post('/api/requests-backup', (req, res) => { try { res.json(requests.backup()); } catch (e) { res.status(400).json({ error: e.message }); } });
 

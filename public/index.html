@@ -20,6 +20,7 @@
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="onboarding.css" />
   <link rel="stylesheet" href="customers.css" />
+  <link rel="stylesheet" href="all-systems.css" />
 </head>
 <body>
   <div class="viewas-bar" id="viewAsBar" role="status" hidden></div>
@@ -66,6 +67,7 @@
       <div class="toolbar">
         <input type="search" id="mxRowSearch" placeholder="filter panels (rows)…" />
         <input type="search" id="mxColSearch" placeholder="filter conferences (columns)…" />
+        <select id="mxSys" class="topo-sel" title="filter rows by system" hidden></select>
         <select id="mxNode" class="topo-sel" title="filter rows by node" hidden></select>
         <select id="mxCard" class="topo-sel" title="filter rows by card/bay" hidden></select>
         <label class="chk"><input type="checkbox" id="mxPanelsOnly" /> panels only</label>
@@ -91,11 +93,12 @@
           <label class="sort-row">
             <span>Sort</span>
             <select id="confSort" class="sort-sel">
-              <option value="name">Name (A→Z)</option>
-              <option value="name-desc">Name (Z→A)</option>
-              <option value="alias">Alias (A→Z)</option>
+              <option value="name">Alias (A→Z)</option>
+              <option value="name-desc">Alias (Z→A)</option>
+              <option value="long">Long name (A→Z)</option>
               <option value="members-desc">Members (most first)</option>
               <option value="members-asc">Members (fewest first)</option>
+              <option value="matched">Matched across systems first</option>
             </select>
           </label>
           <ul id="confList"></ul>
@@ -112,6 +115,7 @@
         <aside class="list">
           <input type="search" id="panelSearch" placeholder="search panels / ports…" />
           <div class="topo-filters">
+            <select id="pnSys" class="topo-sel" hidden></select>
             <select id="pnNode" class="topo-sel" hidden></select>
             <select id="pnCard" class="topo-sel" hidden></select>
           </div>
@@ -237,8 +241,11 @@
   </div>
 
   <!-- First-run wizard loads before app.js so init() can hand off to it. -->
+  <script src="names.js"></script>
+  <script src="tooltip.js"></script>
   <script src="onboarding.js"></script>
   <script src="cust-model.js"></script>
+  <script src="all-systems.js"></script>
   <script src="customers.js"></script>
   <script src="app.js"></script>
 </body>
