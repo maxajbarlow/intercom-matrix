@@ -93,9 +93,9 @@
           <label class="sort-row">
             <span>Sort</span>
             <select id="confSort" class="sort-sel">
-              <option value="name">Name (A→Z)</option>
-              <option value="name-desc">Name (Z→A)</option>
-              <option value="alias">Alias (A→Z)</option>
+              <option value="name">Alias (A→Z)</option>
+              <option value="name-desc">Alias (Z→A)</option>
+              <option value="long">Long name (A→Z)</option>
               <option value="members-desc">Members (most first)</option>
               <option value="members-asc">Members (fewest first)</option>
               <option value="matched">Matched across systems first</option>
@@ -241,6 +241,8 @@
   </div>
 
   <!-- First-run wizard loads before app.js so init() can hand off to it. -->
+  <script src="names.js"></script>
+  <script src="tooltip.js"></script>
   <script src="onboarding.js"></script>
   <script src="cust-model.js"></script>
   <script src="all-systems.js"></script>

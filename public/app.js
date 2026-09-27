@@ -67,6 +67,23 @@ const COL_W = 26, ROW_H = 22, ROWHEAD_W = 260, COLHEAD_H = 156, MAX_GRID = 1500;
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const cls = (t, l) => (t && l ? 'both' : t ? 'talk' : l ? 'listen' : '');
 const sym = (t, l) => (t && l ? '⊗' : t ? '●' : l ? '○' : '');
+
+// ---------- names: a conference shows its alias, the long name is an instant hover ----------
+// (public/names.js picks the name, public/tooltip.js shows any data-tip.) Panels
+// only have a long name, so they show it and repeat it on hover — the lists and
+// the matrix row heads cut long ones off.
+const tipAttr = (text) => (text ? ` data-tip="${esc(text)}"` : '');
+const panelTip = (name, ...extra) => [name, ...extra].filter(Boolean).join('\n');
+// d: { name, label }; extra: further hover lines (member count, systems, …)
+const confNameHtml = (d, ...extra) => `<span class="nm"${tipAttr(Names.tip(d, ...extra))}>${esc(Names.short(d))}</span>`;
+const panelNameHtml = (name, ...extra) => `<span class="nm"${tipAttr(panelTip(name, ...extra))}>${esc(name)}</span>`;
+// The alias of a conference known only by its long name (requests, work order, composer).
+let aliasCache = { data: null, idx: null };
+function confAlias(name, system) {
+  if (aliasCache.data !== state.data) aliasCache = { data: state.data, idx: Names.aliasIndex(state.data) };
+  return Names.aliasOf(aliasCache.idx, name, system);
+}
+const confNameByName = (name, system, label) => confNameHtml({ name, label: label || confAlias(name, system) });
 function fmtDateTime(t) {
   if (!t) return '—';
   const fmt = (state.settings && state.settings.display && state.settings.display.dateFormat) || 'medium';
@@ -232,12 +249,12 @@ function renderDiff(d) {
 
   const blocks = d.conferences.map((c) => {
     const lines = c.members.map((m) => {
-      if (m.status === 'added') return `<div class="dl add">+ ${esc(m.panel)} <span class="dim">[${dirText(m.to)}]</span></div>`;
-      if (m.status === 'removed') return `<div class="dl del">− ${esc(m.panel)} <span class="dim">[${dirText(m.from)}]</span></div>`;
-      return `<div class="dl chg">~ ${esc(m.panel)} <span class="dim">${dirText(m.from)} → ${dirText(m.to)}</span></div>`;
+      if (m.status === 'added') return `<div class="dl add">+ ${panelNameHtml(m.panel)} <span class="dim">[${dirText(m.to)}]</span></div>`;
+      if (m.status === 'removed') return `<div class="dl del">− ${panelNameHtml(m.panel)} <span class="dim">[${dirText(m.from)}]</span></div>`;
+      return `<div class="dl chg">~ ${panelNameHtml(m.panel)} <span class="dim">${dirText(m.from)} → ${dirText(m.to)}</span></div>`;
     }).join('');
     const tag = c.status === 'added' ? '<span class="dsum add">added</span>' : c.status === 'removed' ? '<span class="dsum del">removed</span>' : '<span class="dsum chg">changed</span>';
-    return `<div class="diff-conf ${c.status}"><div class="diff-conf-h">${esc(c.name)} ${tag}</div>${lines}</div>`;
+    return `<div class="diff-conf ${c.status}"><div class="diff-conf-h">${confNameHtml({ name: c.name, label: c.alias })} ${tag}</div>${lines}</div>`;
   }).join('');
   els.srcPrintDiff.innerHTML = head + blocks;
 }
@@ -441,15 +458,17 @@ function renderMatrix() {
     const h = document.createElement('div');
     h.className = 'colhead' + (ck.c.kind === 'group' ? ' group' : '') + (ck.c.matched ? ' matched' : '');
     h.style.gridArea = `1 / ${p + 2}`;
-    h.title = `${ck.c.name}${ck.c.label ? ' (' + ck.c.label + ')' : ''} — ${ck.c.memberCount} members`
-      + (ck.c.matched ? `\nMatched across ${ck.c.variants.length} systems:\n${variantsTitle(ck.c)}` : (all && ck.c.variants ? `\n${ck.c.variants[0].sysName}` : ''));
-    h.textContent = ck.c.name;
+    h.dataset.tip = Names.tip(ck.c, `${ck.c.memberCount} members`,
+      ck.c.matched ? `Matched across ${ck.c.variants.length} systems:\n${variantsTitle(ck.c)}` : (all && ck.c.variants ? ck.c.variants[0].sysName : ''));
+    h.textContent = Names.short(ck.c);
     frag.appendChild(h);
   });
   rowKeep.forEach((rk, p) => {
     const h = document.createElement('div');
     h.className = 'rowhead' + (all ? ` sys-row sys-${sysSlot(rk.r.system)}` : ''); h.style.gridArea = `${p + 2} / 1`;
-    h.title = `${rk.r.name} — ${all ? rk.r.sysName + ' · ' + rk.r.port : rk.r.addr}${rk.r.type ? ' · ' + rk.r.type : ''}`;
+    // the port/addr only when it says something the name doesn't (print rows use the name as addr)
+    const where = all ? rk.r.sysName + (rk.r.port !== rk.r.name ? ' · ' + rk.r.port : '') : (rk.r.addr !== rk.r.name ? rk.r.addr : '');
+    h.dataset.tip = panelTip(rk.r.name, [where, rk.r.type].filter(Boolean).join(' · '));
     h.innerHTML = `<span class="nm">${esc(rk.r.name)}</span>${rk.r.isPanel ? '' : '<span class="pin">port</span>'}`;
     frag.appendChild(h);
   });
@@ -459,7 +478,9 @@ function renderMatrix() {
     const d = document.createElement('div');
     d.className = 'cell ' + cls(cell.t, cell.l); d.textContent = sym(cell.t, cell.l);
     d.style.gridArea = `${rp + 2} / ${cp + 2}`;
-    if (all) { const r = m.rows[cell.r]; d.title = `${r.name} · ${r.sysName}: ${variantNameOn(m.cols[cell.c], r.system)}`; }
+    // panel × conference, both by full name (All systems: the conference's name on that row's system)
+    const r = m.rows[cell.r], c = m.cols[cell.c];
+    d.dataset.tip = (all ? `${r.name} · ${r.sysName}\n${variantNameOn(c, r.system)}` : `${r.name}\n${c.name}`) + `\n${dirText({ t: cell.t, l: cell.l })}`;
     frag.appendChild(d);
   }
   // pending-change overlay (toggle) — markers on top of the live cells
@@ -475,7 +496,7 @@ function renderMatrix() {
         const d = document.createElement('div');
         d.className = 'cell ' + (rec.op === 'add' ? 'pending-add' : 'pending-remove');
         d.textContent = rec.op === 'add' ? '＋' : '－';
-        d.title = `${rec.op === 'add' ? 'pending add' : 'pending remove'} · request #${rec.requestId}`;
+        d.dataset.tip = `${rowKeep[rp].r.name}\n${colKeep[cp].c.name}\n${rec.op === 'add' ? 'pending add' : 'pending remove'} · request #${rec.requestId}`;
         d.style.gridArea = `${rp + 2} / ${cp + 2}`;
         frag.appendChild(d);
       }
@@ -487,11 +508,12 @@ function renderMatrix() {
 // ---------- CONFERENCES ----------
 function allDests() { return [...(state.data.conferences || []), ...(state.data.groups || [])]; }
 function sortConfs(list) {
-  const byName = (a, b) => a.name.localeCompare(b.name);
+  // "name" is the name shown (the alias, else the long name); "long" sorts by long name
+  const byName = (a, b) => Names.short(a).localeCompare(Names.short(b)) || a.name.localeCompare(b.name);
   const arr = list.slice();
   switch (els.confSort.value) {
-    case 'name-desc': return arr.sort((a, b) => b.name.localeCompare(a.name));
-    case 'alias': return arr.sort((a, b) => (a.label || '').localeCompare(b.label || '') || byName(a, b));
+    case 'name-desc': return arr.sort((a, b) => byName(b, a));
+    case 'long': return arr.sort((a, b) => a.name.localeCompare(b.name));
     case 'members-desc': return arr.sort((a, b) => b.memberCount - a.memberCount || byName(a, b));
     case 'members-asc': return arr.sort((a, b) => a.memberCount - b.memberCount || byName(a, b));
     case 'matched': return arr.sort((a, b) => (b.matched ? 1 : 0) - (a.matched ? 1 : 0) || byName(a, b));
@@ -509,8 +531,7 @@ function renderConferences() {
     const li = document.createElement('li');
     const realIdx = allDests().indexOf(d);
     li.className = state.selConf === realIdx ? 'active' : '';
-    li.innerHTML = `<span class="nm">${esc(d.name)}</span>${all ? `<span class="sys-chips">${sysChips(d.systems || [])}</span>` : ''}<span class="badge${d.kind === 'group' ? ' group' : ''}">${d.memberCount}</span>`;
-    if (all && d.matched) li.title = variantsTitle(d);
+    li.innerHTML = `${confNameHtml(d, all && d.matched ? variantsTitle(d) : '')}${all ? `<span class="sys-chips">${sysChips(d.systems || [])}</span>` : ''}<span class="badge${d.kind === 'group' ? ' group' : ''}">${d.memberCount}</span>`;
     li.onclick = () => { state.selConf = realIdx; renderConferences(); renderConfDetail(d); };
     ul.appendChild(li);
   });
@@ -520,15 +541,15 @@ function renderConferences() {
 function renderConfDetail(d) {
   const all = isAllView();
   const rows = d.members.map((m) => `
-    <tr><td><a href="#" class="xlink" data-addr="${esc(m.addr)}" title="Open this panel">${esc(m.name)}</a></td>${all ? `<td>${sysChip(m.system, m.sysName)}</td>` : ''}<td class="type-chip">${esc(m.type)}</td>
+    <tr><td><a href="#" class="xlink" data-addr="${esc(m.addr)}"${tipAttr(panelTip(m.name, 'Open this panel'))}>${esc(m.name)}</a></td>${all ? `<td>${sysChip(m.system, m.sysName)}</td>` : ''}<td class="type-chip">${esc(m.type)}</td>
     <td>${dirPill(m.talk, m.listen)}</td><td class="type-chip">${esc(m.port || m.addr)}</td></tr>`).join('');
   // All systems + matched: the conference's real name on each system
   const names = all && d.matched ? `<table class="members sys-names"><thead><tr><th>System</th><th>Name on that system</th><th>Label</th></tr></thead><tbody>${
     d.variants.map((v) => `<tr><td>${sysChip(v.system, v.sysName)}</td><td>${esc(v.name)}</td><td class="type-chip">${esc(v.label || '')}</td></tr>`).join('')}</tbody></table>` : '';
   const idx = allDests().indexOf(d);
   els.confDetail.innerHTML = `
-    <div class="detail-head"><h2>${esc(d.name)}</h2><button class="btn small" data-reqconf="${esc(d.name)}" data-confidx="${idx}">⇄ Request change</button></div>
-    <div class="meta"><span class="tag">${d.kind}</span>${d.label ? '<span class="tag">' + esc(d.label) + '</span>' : ''}${all && d.matched ? `<span class="tag matched-tag">⇄ matched across ${d.variants.length} systems</span>` : ''}${all && !d.matched && d.systems ? sysChips(d.systems) + ' ' : ''}${d.memberCount} members</div>
+    <div class="detail-head"><h2>${confNameHtml(d)}</h2><button class="btn small" data-reqconf="${esc(d.name)}" data-confidx="${idx}">⇄ Request change</button></div>
+    <div class="meta"><span class="tag">${d.kind}</span>${d.label ? '<span class="tag">' + esc(d.name) + '</span>' : ''}${all && d.matched ? `<span class="tag matched-tag">⇄ matched across ${d.variants.length} systems</span>` : ''}${all && !d.matched && d.systems ? sysChips(d.systems) + ' ' : ''}${d.memberCount} members</div>
     ${names}
     <table class="members"><thead><tr><th>Member</th>${all ? '<th>System</th>' : ''}<th>Type</th><th>Direction</th><th>Port</th></tr></thead>
     <tbody>${rows || `<tr><td colspan="${all ? 5 : 4}">No members.</td></tr>`}</tbody></table>
@@ -578,7 +599,7 @@ function renderPanels() {
   list.forEach((p) => {
     const li = document.createElement('li');
     li.className = state.selPanel === p.addr ? 'active' : '';
-    li.innerHTML = `<span class="nm">${esc(p.name)}</span>${all ? `<span class="sys-chips">${sysChip(p.system, p.sysName)}</span>` : ''}<span class="badge">${p.memberships.length}</span>`;
+    li.innerHTML = `${panelNameHtml(p.name, p.type)}${all ? `<span class="sys-chips">${sysChip(p.system, p.sysName)}</span>` : ''}<span class="badge">${p.memberships.length}</span>`;
     li.onclick = () => { state.selPanel = p.addr; renderPanels(); renderPanelDetail(p); };
     ul.appendChild(li);
   });
@@ -593,13 +614,16 @@ function renderPanelDetail(p) {
   const rows = p.memberships.map((m) => {
     // All systems: link by merged column index (names can repeat across systems)
     const di = all && m.col != null ? allDests().findIndex((d) => d.idx === m.col) : destIdx.get(m.kind + '\u0000' + m.name);
-    const real = all && m.realName && m.realName !== m.name ? ` <span class="real-name" title="Name on ${esc(p.sysName)}">${esc(m.realName)}</span>` : '';
-    const nameCell = (di != null && di >= 0 ? `<a href="#" class="xlink" data-conf="${di}" title="Open this ${m.kind}">${esc(m.name)}</a>` : esc(m.name)) + real;
+    // the alias (All systems: the merged column's), long name + this system's real name on hover
+    const d = di != null && di >= 0 ? allDests()[di] : null;
+    const shown = { name: m.name, label: d ? d.label : m.label };
+    const real = all && m.realName && m.realName !== m.name ? `Name on ${p.sysName}: ${m.realName}` : '';
+    const nameCell = d ? `<a href="#" class="xlink" data-conf="${di}"${tipAttr(Names.tip(shown, real, `Open this ${m.kind}`))}>${esc(Names.short(shown))}</a>` : confNameHtml(shown, real);
     return `
     <tr><td>${nameCell}</td><td class="type-chip">${m.kind}</td><td>${dirPill(m.talk, m.listen)}</td></tr>`;
   }).join('');
   els.panelDetail.innerHTML = `
-    <div class="detail-head"><h2>${esc(p.name)}</h2><button class="btn small" data-reqpanel="${esc(p.name)}" data-paneladdr="${esc(p.addr)}">⇄ Request change</button></div>
+    <div class="detail-head"><h2>${panelNameHtml(p.name)}</h2><button class="btn small" data-reqpanel="${esc(p.name)}" data-paneladdr="${esc(p.addr)}">⇄ Request change</button></div>
     <div class="meta">${all ? sysChip(p.system, p.sysName) + ' ' : ''}<span class="tag">${p.isPanel ? 'panel' : 'port'}</span>${p.type ? '<span class="tag">' + esc(p.type) + '</span>' : ''}${p.twoWire ? '<span class="tag">2-wire (in+out)</span>' : ''}<span class="tag">${esc(p.port || p.addr)}</span>${p.node ? '<span class="tag">' + esc(p.node) + ' · ' + esc(p.bay || '') + '</span>' : ''}${members.length} conference${members.length === 1 ? '' : 's'}</div>
     <table class="members"><thead><tr><th>Conference / Group</th><th>Kind</th><th>Direction</th></tr></thead>
     <tbody>${rows || '<tr><td colspan="3">Not on any conference.</td></tr>'}</tbody></table>
@@ -778,7 +802,7 @@ function buildPendingIndex() {
     // membership ops (add/remove/change_direction) overlay onto the matrix/detail
     const name = c.panelName || c.panel, op = c.type === 'add_member' ? 'add' : c.type === 'remove_member' ? 'remove' : 'dir';
     const panel = all ? c.system + ':' + (c.panel || name) : name;
-    const rec = { op, requestId: c.requestId, talk: c.talk, listen: c.listen, isNew: c.isNewConference, label: all ? `${name} (${c.sysName})` : name };
+    const rec = { op, requestId: c.requestId, talk: c.talk, listen: c.listen, isNew: c.isNewConference, label: all ? `${name} (${c.sysName})` : name, conference: c.conference, system: c.system, sysName: all ? c.sysName : '' };
     if (!byConf.has(ck)) byConf.set(ck, new Map());
     byConf.get(ck).set(panel, rec);
     if (!byPanel.has(panel)) byPanel.set(panel, new Map());
@@ -880,7 +904,7 @@ function memberLine(it) {
   const dir = it.talk && it.listen ? 'T+L' : it.talk ? 'T' : it.listen ? 'L' : '';
   const op = it.type === 'add_member' ? ['add', '＋ add'] : it.type === 'remove_member' ? ['remove', '－ remove'] : ['dir', '⇄ set'];
   const showDir = (it.type === 'add_member' || it.type === 'change_direction') && dir;
-  return `<li class="grp-item ${op[0]}"><span class="gi-op">${op[1]}</span><span class="gi-panel">${esc(it.panel.name)}</span>${showDir ? `<span class="gi-dir">${dir}</span>` : ''}<span class="gi-st-wrap">${itemStatus(it)}</span></li>`;
+  return `<li class="grp-item ${op[0]}"><span class="gi-op">${op[1]}</span><span class="gi-panel">${panelNameHtml(it.panel.name)}</span>${showDir ? `<span class="gi-dir">${dir}</span>` : ''}<span class="gi-st-wrap">${itemStatus(it)}</span></li>`;
 }
 // Group a request's changes by conference — the way the work is done in the config tool.
 function groupChanges(items) {
@@ -896,15 +920,15 @@ function groupChanges(items) {
   }
   return [...m.values()];
 }
-function renderChangeGroups(items) {
+function renderChangeGroups(items, system) {
   return groupChanges(items).map((g) => {
     const tags = [];
     if (g.create) tags.push(`<span class="grp-tag new">＋ create new</span>${itemStatus(g.create)}`);
     if (g.del) tags.push(`<span class="grp-tag del">✕ delete conference</span>${itemStatus(g.del)}`);
-    if (g.rename) tags.push(`<span class="grp-tag ren">✎ rename → “${esc(g.rename.newName)}”</span>${itemStatus(g.rename)}`);
+    if (g.rename) tags.push(`<span class="grp-tag ren">✎ rename → “${esc(g.rename.newName)}”${g.rename.newLabel ? ` (${esc(g.rename.newLabel)})` : ''}</span>${itemStatus(g.rename)}`);
     const gcls = g.create ? 'grp-new' : g.del ? 'grp-del' : g.rename ? 'grp-ren' : '';
     return `<div class="grp ${gcls}">
-      <div class="grp-head"><span class="grp-name">${esc(g.name)}</span>${g.label ? ` <span class="muted">(${esc(g.label)})</span>` : ''}<span class="grp-tags">${tags.join('')}</span></div>
+      <div class="grp-head"><span class="grp-name">${confNameByName(g.name, system, g.label)}</span><span class="grp-tags">${tags.join('')}</span></div>
       ${g.members.length ? `<ul class="grp-items">${g.members.map(memberLine).join('')}</ul>` : ''}
     </div>`;
   }).join('');
@@ -924,7 +948,7 @@ function renderReqDetail() {
     ${r.justification ? `<p class="rd-justify">${esc(r.justification)}</p>` : ''}
     ${r.validation.hasBlockers ? '<div class="rd-warn">⚠ Some changes don’t match the current system — review before implementing.</div>' : ''}
     <div class="rd-section-h">What to change in the config tool <span class="muted">(${r.items.length})</span></div>
-    <div class="grp-list">${renderChangeGroups(r.items)}</div>
+    <div class="grp-list">${renderChangeGroups(r.items, r.system)}</div>
     <div class="rd-actions">${transitionButtons(r.status)}</div>
     <div class="rd-cols">
       <div>
@@ -974,13 +998,13 @@ async function renderWorkOrder() {
     if (g.del) tags.push('<span class="grp-tag del">✕ delete conference</span>');
     if (g.rename) tags.push(`<span class="grp-tag ren">✎ rename → “${esc(g.rename)}”</span>`);
     const items = [
-      ...g.adds.map((a) => `<li class="grp-item add"><span class="gi-op">＋ add</span><span class="gi-panel">${esc(a.panel)}</span>${dTag(a)}${req(a.requestId)}</li>`),
-      ...g.removes.map((rm) => `<li class="grp-item remove"><span class="gi-op">－ remove</span><span class="gi-panel">${esc(rm.panel)}</span>${req(rm.requestId)}</li>`),
-      ...(g.dirs || []).map((d) => `<li class="grp-item dir"><span class="gi-op">⇄ set</span><span class="gi-panel">${esc(d.panel)}</span>${dTag(d)}${req(d.requestId)}</li>`),
+      ...g.adds.map((a) => `<li class="grp-item add"><span class="gi-op">＋ add</span><span class="gi-panel">${panelNameHtml(a.panel)}</span>${dTag(a)}${req(a.requestId)}</li>`),
+      ...g.removes.map((rm) => `<li class="grp-item remove"><span class="gi-op">－ remove</span><span class="gi-panel">${panelNameHtml(rm.panel)}</span>${req(rm.requestId)}</li>`),
+      ...(g.dirs || []).map((d) => `<li class="grp-item dir"><span class="gi-op">⇄ set</span><span class="gi-panel">${panelNameHtml(d.panel)}</span>${dTag(d)}${req(d.requestId)}</li>`),
     ].join('');
     const gcls = g.isNew ? 'grp-new' : g.del ? 'grp-del' : g.rename ? 'grp-ren' : '';
     return `<div class="grp ${gcls}">
-      <div class="grp-head">${g.sysName ? sysChip(g.system, g.sysName) + ' ' : ''}<span class="grp-name">${esc(g.conference)}</span>${g.conferenceLabel ? ` <span class="muted">(${esc(g.conferenceLabel)})</span>` : ''}<span class="grp-tags">${tags.join('')}</span></div>
+      <div class="grp-head">${g.sysName ? sysChip(g.system, g.sysName) + ' ' : ''}<span class="grp-name">${confNameByName(g.conference, g.system, g.conferenceLabel)}</span><span class="grp-tags">${tags.join('')}</span></div>
       ${items ? `<ul class="grp-items">${items}</ul>` : ''}
     </div>`;
   };
@@ -1022,7 +1046,8 @@ function renderChips(field) {
   const sel = state.composer ? state.composer.sel[field] : [];
   if (!multi || !sel.length) { cont.innerHTML = ''; cont.classList.add('hidden'); return; }
   cont.classList.remove('hidden');
-  cont.innerHTML = sel.map((v, i) => `<span class="tok">${esc(v)}<button class="tok-x" data-field="${field}" data-i="${i}" title="Remove">×</button></span>`).join('');
+  const show = field === 'conf' ? (v) => confNameByName(v) : (v) => panelNameHtml(v);
+  cont.innerHTML = sel.map((v, i) => `<span class="tok">${show(v)}<button class="tok-x" data-field="${field}" data-i="${i}" title="Remove">×</button></span>`).join('');
 }
 // how many change items the current selection will produce → live button label
 function updateAddCount() {
@@ -1095,12 +1120,12 @@ function composerAddChange() {
 function describeStaged(ch) {
   const d = ch.talk && ch.listen ? 'T+L' : ch.talk ? 'T' : ch.listen ? 'L' : '—';
   switch (ch.type) {
-    case 'create_conference': return { verb: 'create', cls: 'add', label: `“${esc(ch.conference)}”${ch.label ? ` <span class="muted">(${esc(ch.label)})</span>` : ''}` };
-    case 'rename_conference': return { verb: 'rename', cls: 'dir', label: `“${esc(ch.conference)}” <span class="muted">→</span> “${esc(ch.newName)}”` };
-    case 'delete_conference': return { verb: 'delete', cls: 'rem', label: `“${esc(ch.conference)}”` };
-    case 'add_member': return { verb: 'add', cls: 'add', label: `${esc(ch.conference)} <span class="muted">to</span> ${esc(ch.panel)} <span class="muted">· ${d}</span>` };
-    case 'remove_member': return { verb: 'remove', cls: 'rem', label: `${esc(ch.conference)} <span class="muted">from</span> ${esc(ch.panel)}` };
-    case 'change_direction': return { verb: 'edit', cls: 'dir', label: `${esc(ch.conference)} <span class="muted">on</span> ${esc(ch.panel)} <span class="muted">→ ${d}</span>` };
+    case 'create_conference': return { verb: 'create', cls: 'add', label: `“${confNameHtml({ name: ch.conference, label: ch.label })}”` };
+    case 'rename_conference': return { verb: 'rename', cls: 'dir', label: `“${confNameByName(ch.conference)}” <span class="muted">→</span> “${confNameHtml({ name: ch.newName, label: ch.newLabel })}”` };
+    case 'delete_conference': return { verb: 'delete', cls: 'rem', label: `“${confNameByName(ch.conference)}”` };
+    case 'add_member': return { verb: 'add', cls: 'add', label: `${confNameByName(ch.conference)} <span class="muted">to</span> ${panelNameHtml(ch.panel)} <span class="muted">· ${d}</span>` };
+    case 'remove_member': return { verb: 'remove', cls: 'rem', label: `${confNameByName(ch.conference)} <span class="muted">from</span> ${panelNameHtml(ch.panel)}` };
+    case 'change_direction': return { verb: 'edit', cls: 'dir', label: `${confNameByName(ch.conference)} <span class="muted">on</span> ${panelNameHtml(ch.panel)} <span class="muted">→ ${d}</span>` };
     default: return { verb: ch.type, cls: '', label: '' };
   }
 }
@@ -1117,8 +1142,8 @@ function describeBatch(batch) {
   const dirTag = op === 'remove_member' ? '' : ` <span class="muted">· ${d}</span>`;
   const cN = (n) => `${n} conference${n === 1 ? '' : 's'}`, pN = (n) => `${n} panel${n === 1 ? '' : 's'}`;
   let label;
-  if (confs.length === 1) label = `${esc(confs[0])} <span class="muted">${prep}</span> ${pN(panels.length)}${dirTag}`;
-  else if (panels.length === 1) label = `${cN(confs.length)} <span class="muted">${prep}</span> ${esc(panels[0])}${dirTag}`;
+  if (confs.length === 1) label = `${confNameByName(confs[0])} <span class="muted">${prep}</span> ${pN(panels.length)}${dirTag}`;
+  else if (panels.length === 1) label = `${cN(confs.length)} <span class="muted">${prep}</span> ${panelNameHtml(panels[0])}${dirTag}`;
   else label = `${cN(confs.length)} <span class="muted">×</span> ${pN(panels.length)} <span class="muted">(${items.length})</span>${dirTag}`;
   return { verb, cls, label };
 }
@@ -1133,7 +1158,7 @@ function renderComposerChanges() {
   }).join('');
 }
 // Custom searchable dropdown (keeps type-to-filter; replaces the native datalist).
-// opts: { onPick(value), emptyHint() }
+// opts: { onPick(value), emptyHint(), render(value) → option html, hay(value) → text to search }
 function attachCombo(inputId, listId, getItems, opts = {}) {
   const input = document.getElementById(inputId), list = document.getElementById(listId);
   let filtered = [], active = -1;
@@ -1153,7 +1178,8 @@ function attachCombo(inputId, listId, getItems, opts = {}) {
     const q = input.value.trim().toLowerCase();
     const all = getItems();
     const sel = selected();
-    filtered = all.filter((n) => (!q || n.toLowerCase().includes(q)) && !sel.includes(n)).slice(0, 60);
+    const hay = opts.hay || ((n) => n);
+    filtered = all.filter((n) => (!q || hay(n).toLowerCase().includes(q)) && !sel.includes(n)).slice(0, 60);
     active = -1;
     if (!filtered.length) {
       const hint = !all.length && opts.emptyHint ? opts.emptyHint() : null;
@@ -1161,7 +1187,8 @@ function attachCombo(inputId, listId, getItems, opts = {}) {
       else list.classList.add('hidden');
       return;
     }
-    list.innerHTML = filtered.map((n, i) => `<div class="combo-opt" data-i="${i}">${esc(n)}</div>`).join('');
+    const render = opts.render || esc;
+    list.innerHTML = filtered.map((n, i) => `<div class="combo-opt" data-i="${i}">${render(n)}</div>`).join('');
     list.classList.remove('hidden');
     place();
   };
@@ -1219,7 +1246,10 @@ function pendingPanelHtml(kind, name) {
   const ren = kind === 'conf' ? pi.renameConfs.get(name) : null;
   if (!m && !isNewConf && !isDelConf && !ren) return '';
   const opTag = (rec) => rec.op === 'add' ? '<span class="padd">＋ pending add</span>' : rec.op === 'remove' ? '<span class="prem">－ pending remove</span>' : '<span class="pdir">⇄ pending direction</span>';
-  const rows = m ? [...m.entries()].map(([k, rec]) => `<li>${opTag(rec)} ${esc(kind === 'conf' && rec.label ? rec.label : k)} <a href="#" class="reqlink" data-goreq="${rec.requestId}">#${rec.requestId}</a></li>`).join('') : '';
+  // conference detail lists panels; panel detail lists conferences (by alias, long name on hover)
+  const who = (k, rec) => (kind === 'conf' ? panelNameHtml(rec.label || k)
+    : confNameByName(rec.conference, rec.system) + (rec.sysName ? ` <span class="muted">(${esc(rec.sysName)})</span>` : ''));
+  const rows = m ? [...m.entries()].map(([k, rec]) => `<li>${opTag(rec)} ${who(k, rec)} <a href="#" class="reqlink" data-goreq="${rec.requestId}">#${rec.requestId}</a></li>`).join('') : '';
   const banners = [
     isNewConf ? '<div class="pending-new">＋ pending creation</div>' : '',
     isDelConf ? '<div class="pending-del">✕ pending deletion</div>' : '',
@@ -1295,6 +1325,13 @@ $('cChanges').addEventListener('click', (e) => { const x = e.target.closest('.cc
   state.composer.sel[x.dataset.field].splice(Number(x.dataset.i), 1);
   renderChips(x.dataset.field); updateAddCount();
 }));
+// A conference option in the picker: the alias, with the long name beside it to
+// search by eye (and on hover, for names too long for the list).
+function confOptionHtml(name) {
+  const alias = confAlias(name);
+  if (!alias || alias === name) return confNameByName(name);
+  return `<span${tipAttr(name)}><span class="combo-alias">${esc(alias)}</span> <span class="combo-long">${esc(name)}</span></span>`;
+}
 // conference combo (multi-select): scoped to the selected panels' memberships for
 // remove / change-direction; otherwise all conferences (plus any created here).
 attachCombo('cConfInput', 'cConfList', () => {
@@ -1305,8 +1342,8 @@ attachCombo('cConfInput', 'cConfList', () => {
     return [...set];
   }
   return [...new Set([...stagedNewConfs(), ...((state.data && state.data.conferences || []).map((c) => c.name))])];
-}, { field: 'conf', multi: confMulti, emptyHint: () => (state.composer && PANEL_SCOPED.has(state.composer.op) && !state.composer.sel.panel.length) ? 'Pick a panel first' : null });
-attachCombo('cPanelInput', 'cPanelList', () => (state.data && state.data.panels || []).map((p) => p.name), { field: 'panel', multi: () => true });
+}, { field: 'conf', multi: confMulti, render: confOptionHtml, hay: (n) => n + ' ' + confAlias(n), emptyHint: () => (state.composer && PANEL_SCOPED.has(state.composer.op) && !state.composer.sel.panel.length) ? 'Pick a panel first' : null });
+attachCombo('cPanelInput', 'cPanelList', () => (state.data && state.data.panels || []).map((p) => p.name), { field: 'panel', multi: () => true, render: (n) => panelNameHtml(n) });
 // Close the (fixed) dropdowns when the MODAL scrolls — but not when the list
 // itself is being scrolled (that would make it vanish as you scroll the options).
 $('composer').addEventListener('scroll', (e) => {

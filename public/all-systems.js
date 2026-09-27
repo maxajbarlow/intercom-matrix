@@ -6,7 +6,7 @@
 //
 // Loaded BEFORE app.js; everything here runs lazily, after app.js globals exist.
 
-/* global state, esc, els, switchSystem, openComposer, allDests */
+/* global state, esc, els, switchSystem, openComposer, allDests, tipAttr, Names */
 
 const ALL_SYSTEMS = 'all';
 const ALL_SYSTEMS_NAME = 'All systems';
@@ -42,7 +42,7 @@ function chooseSystem(anchor, title, options) {
     menu.className = 'sys-menu';
     menu.setAttribute('role', 'menu');
     menu.innerHTML = `<div class="sys-menu-h">${esc(title)}</div>` + options.map((o, i) =>
-      `<button role="menuitem" data-i="${i}">${sysChip(o.system, o.sysName)}<span>${esc(o.hint || '')}</span></button>`).join('');
+      `<button role="menuitem" data-i="${i}">${sysChip(o.system, o.sysName)}<span${tipAttr(o.tip)}>${esc(o.hint || '')}</span></button>`).join('');
     const r = anchor.getBoundingClientRect();
     menu.style.top = `${Math.round(r.bottom + window.scrollY + 6)}px`;
     menu.style.left = `${Math.round(Math.max(8, r.right + window.scrollX - 260))}px`;
@@ -66,7 +66,7 @@ async function requestChange(seed, anchor) {
   if (!isAllView()) { openComposer({ conference: s.conference, panel: s.panel, op: s.op || 'add_member' }); return; }
   let options;
   if (s.confIdx != null && allDests()[s.confIdx]) {
-    options = allDests()[s.confIdx].variants.map((v) => ({ system: v.system, sysName: v.sysName, conference: v.name, hint: v.name }));
+    options = allDests()[s.confIdx].variants.map((v) => ({ system: v.system, sysName: v.sysName, conference: v.name, hint: Names.short(v), tip: v.name }));
   } else if (s.panelAddr) {
     const p = (state.data.panels || []).find((x) => x.addr === s.panelAddr);
     options = p ? [{ system: p.system, sysName: p.sysName, panel: p.port }] : [];
